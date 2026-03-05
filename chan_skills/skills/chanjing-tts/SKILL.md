@@ -91,6 +91,7 @@ Content-Type: application/json; charset=utf-8
 #### 选择需要使用的音色ID
 
 通过API获取当前可用的音色ID，然后从中选择适合手头任务的ID。
+推荐先获取全部音色ID，从中选择适合用户需求的ID来进行下一步。
 
 请求地址
 
@@ -109,7 +110,7 @@ access_token: {{access_token}}
 | Key | Value |  |
 | --- | --- | --- |
 | page | 1 | 当前页 |
-| size | 10 | 每页数量 |
+| size | 100 | 每页数量 |
 
 响应示例
 
@@ -146,9 +147,9 @@ access_token: {{access_token}}
         ],
         "page_info": {
             "page": 1,
-            "size": 10,
+            "size": 100,
             "total_count": 98,
-            "total_page": 10
+            "total_page": 1
         }
     }
 }
