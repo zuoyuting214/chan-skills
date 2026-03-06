@@ -84,7 +84,7 @@ Response status code description:
 Post to the following endpoint to create a voice.
 
 ```http
-GET  /open/v1/create_customised_audio
+POST /open/v1/create_customised_audio
 access_token: {{access_token}}
 Content-Type: application/json
 ```
@@ -139,7 +139,8 @@ Response status code description:
 
 ### Poll Voice API
 
-Send a GET request to the following endpoint to query whether the voice is ready to be used, voice ID is obtained in the previous step:
+Send a GET request to the following endpoint to query whether the voice is ready to be used, voice ID is obtained in the previous step.
+The polling process may take a few minutes, keep polling until the status indicates the voice is ready.
 
 ```http
 GET /open/v1/customised_audio?id={{voice_id}}
