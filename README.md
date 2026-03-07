@@ -9,15 +9,15 @@ Chan Openclaw skills，providing pratical tools with a focus on E-Commerce conte
 ```
 # List available Chan skills
 # 查看蝉系可安装skill列表
-npx skills add chanjing-ai/chan-skills --list --full-depth
+npx skills add chanjing-ai/chan-skills --list
 
 # Install all Chan skills
 # 安装蝉系所有skill 
-npx skills add chanjing-ai/chan-skills --full-depth
+npx skills add chanjing-ai/chan-skills
 
 # Install certain Chan skill name
 # 安装指定的skill
-npx skills add chanjing-ai/chan-skills --full-depth --skill chanjing-tts -y
+npx skills add chanjing-ai/chan-skills --skill chanjing-tts -y
 ```
 
 ## Available Skill 
