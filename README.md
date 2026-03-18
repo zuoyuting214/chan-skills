@@ -66,3 +66,7 @@ python skills/chanjing-credentials-guard/scripts/chanjing-config --status
 | chanjing-tts | Bilingual text-to-speech using provided voices (Chinese and English). |
 | chanjing-tts-voice-clone | Bilingual TTS using a user-provided reference voice. |
 | chanjing-avatar | Lip-sync / digital avatar video generation. |
+| chanjing-video-compose | Digital human video synthesis from text or audio, with task polling and optional local download. |
+| chanjing-customised-person | Create, inspect, poll, and delete customised digital humans from uploaded source videos. |
+| chanjing-text-to-digital-person | Create AI digital person images from prompts, turn them into short talking videos, and optionally run LoRA tasks. |
+| chanjing-ai-creation | Generic AI creation task runner for supported image/video models, with submit, list, detail, polling, and download workflows. |
