@@ -60,45 +60,35 @@ def check_ffmpeg(quiet: bool) -> bool:
 
 
 def check_chan_skills(quiet: bool) -> bool:
-    # 优先环境变量，否则从本文件位置自动推导（scripts/ → skill/ → skills/）
     d = os.environ.get("CHAN_SKILLS_DIR", "").strip()
-    if d:
-        p = Path(d)
-    else:
-        p = Path(__file__).resolve().parent.parent.parent
-
-    if not p.is_dir():
-        _fail(f"chan-skills/skills 目录不存在: {p}\n"
-              "      如需手动指定：export CHAN_SKILLS_DIR=/path/to/chan-skills/skills")
+    if not d:
+        _fail(
+            "CHAN_SKILLS_DIR not set.\n"
+            "      export CHAN_SKILLS_DIR=/path/to/chan-skills"
+        )
         return False
-
+    p = Path(d)
+    if not p.is_dir():
+        _fail(f"CHAN_SKILLS_DIR does not exist: {p}")
+        return False
     required_skills = [
         "chanjing-video-compose",
         "chanjing-tts",
         "chanjing-ai-creation",
         "chanjing-credentials-guard",
     ]
-    missing = [s for s in required_skills if not (p / s).is_dir()]
+    missing = []
+    for skill in required_skills:
+        skill_path = p / "skills" / skill
+        if not skill_path.is_dir():
+            missing.append(skill)
     if missing:
         _fail(
-            f"chan-skills 缺少子 skill: {', '.join(missing)}\n"
-            f"      请确认已 clone 完整的 chan-skills 仓库，当前路径: {p}"
+            f"chan-skills is missing sub-skills: {', '.join(missing)}\n"
+            f"      Check that CHAN_SKILLS_DIR points to a complete chan-skills checkout: {p}"
         )
         return False
     _ok(f"chan-skills: {p}", quiet)
-    return True
-
-
-def check_deerapi(quiet: bool) -> bool:
-    key = os.environ.get("DEERAPI_API_KEY", "").strip()
-    if not key:
-        _fail(
-            "DEERAPI_API_KEY not set (needed for LLM script/storyboard generation).\n"
-            "      export DEERAPI_API_KEY=sk-..."
-        )
-        return False
-    masked = key[:8] + "..." + key[-4:]
-    _ok(f"DEERAPI_API_KEY: {masked}", quiet)
     return True
 
 
@@ -138,7 +128,6 @@ def main() -> None:
         check_python(args.quiet),
         check_ffmpeg(args.quiet),
         check_chan_skills(args.quiet),
-        check_deerapi(args.quiet),
         check_chanjing_credentials(args.quiet),
     ]
 

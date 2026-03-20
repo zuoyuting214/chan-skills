@@ -24,14 +24,27 @@ class TestInputNormalisation(unittest.TestCase):
         self.assertEqual(req.duration_sec, 60)
         self.assertTrue(req.use_avatar)
         self.assertTrue(req.subtitle_required)
+        self.assertTrue(req.strict_validation)
+        self.assertFalse(req.allow_auto_expand_topic)
+        self.assertEqual(req.max_retry_per_step, 1)
 
     def test_explicit_values_override_defaults(self):
-        req = normalise_request({"topic": "test", "platform": "shipinhao", "duration_sec": 30})
+        req = normalise_request({
+            "topic": "家装短视频获客选题说明足够长",
+            "platform": "shipinhao",
+            "duration_sec": 30,
+            "strict_validation": False,
+            "allow_auto_expand_topic": True,
+            "max_retry_per_step": 2,
+        })
         self.assertEqual(req.platform, "shipinhao")
         self.assertEqual(req.duration_sec, 30)
+        self.assertFalse(req.strict_validation)
+        self.assertTrue(req.allow_auto_expand_topic)
+        self.assertEqual(req.max_retry_per_step, 2)
 
     def test_duration_coerced_to_int(self):
-        req = normalise_request({"topic": "test", "duration_sec": "90"})
+        req = normalise_request({"topic": "短视频选题需要超过五个字长度", "duration_sec": "90"})
         self.assertIsInstance(req.duration_sec, int)
         self.assertEqual(req.duration_sec, 90)
 
@@ -41,7 +54,7 @@ class TestVagueInputRejection(unittest.TestCase):
     def test_empty_topic_rejected(self):
         result = run({"topic": ""})
         self.assertEqual(result.status, "failed")
-        self.assertIn("模糊", result.error)
+        self.assertIn("选题", result.error)
 
     def test_very_short_topic_rejected(self):
         result = run({"topic": "AI"})
@@ -54,6 +67,15 @@ class TestVagueInputRejection(unittest.TestCase):
     def test_vague_phrase_rejected(self):
         result = run({"topic": "随便来一个"})
         self.assertEqual(result.status, "failed")
+
+    def test_strict_validation_off_allows_short_topic(self):
+        result = run({"topic": "短", "strict_validation": False})
+        self.assertEqual(result.status, "success")
+
+    def test_allow_auto_expand_makes_vague_topic_pass(self):
+        result = run({"topic": "随便", "allow_auto_expand_topic": True})
+        self.assertEqual(result.status, "success")
+        self.assertIn("可落地", result.video_plan["topic"])
 
 
 class TestFullWorkflowStub(unittest.TestCase):
@@ -104,6 +126,8 @@ class TestFullWorkflowStub(unittest.TestCase):
         self.assertIsNotNone(result.render_result)
         self.assertIn("render_path", result.render_result)
         self.assertEqual(result.render_result["render_path"], "stub")
+        self.assertIn("degrade_log", result.render_result)
+        self.assertEqual(result.render_result["degrade_log"], [])
 
     def test_result_has_debug_info(self):
         result = self._run_example("为什么现在很多老板开始重视 AI agent")

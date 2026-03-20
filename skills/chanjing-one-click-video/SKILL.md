@@ -1,225 +1,123 @@
 ---
 name: chanjing-one-click-video
-description: 用户输入一个选题，自动生成完整短视频成片（文案、分镜、数字人口播 + AI 生成画面混合剪辑、合成视频）。适用于"一键成片"、"根据选题做视频"等场景。
+description: 用户输入一个选题，自动生成完整短视频成片（文案、分镜、数字人口播 + AI 画面混剪）。适用于「一键成片」「根据选题做视频」等场景。
 ---
 
 # chanjing-one-click-video
 
-## 目的
+## 做什么
 
-将用户输入的选题（一句话话题）自动编排为完整的「数字人口播 + AI 生成画面」混合型短视频，包括：
+选题 → 本地生成 `video_plan`、口播全文、分镜 → **整篇一次 TTS** → 按分镜切音频 → 数字人镜头走 `chanjing-video-compose`（音频驱动），AI 镜头走 `chanjing-ai-creation` 文生视频并与切段 WAV 合成 → ffmpeg 拼接为本地 mp4。
 
-1. 输入标准化（补全默认值，验证选题是否有效）
-2. 生成 `video_plan`（视频规划：受众、角度、镜头数、语气）
-3. 生成口播文案（标题、hook、全文、CTA）
-4. 生成分镜脚本（混合分配：奇数段=数字人、偶数段=AI 画面）
-5. 并行渲染所有镜头（DH 镜头用 video-compose，AI 镜头用 ai-creation + TTS）
-6. ffmpeg 本地合成最终视频
-7. 输出统一结构化结果 + 本地视频文件路径
+**真值来源**：`scripts/run_workflow.py`（编排）与 `scripts/render.py`（渲染）。本文只写触发条件、前置、参数与调用方式，不重复脚本内步骤细节。
 
 ---
 
-## 何时触发
+## 何时用 / 何时不用
 
-当用户表达以下意图时触发：
+**用**：一键成片、把话题做成口播短视频、要「生成视频」而不只是文案。
 
-- "根据这个选题生成一个短视频"
-- "帮我一键做成片"
-- "把这个话题做成口播视频"
-- "生成一个适合抖音的 60 秒视频"
-- "我有个选题，帮我做成视频"
-- "一键成片"
+**不用**：只要文案/标题、运营策略、未明确要视频、或编辑已有成片。
 
 ---
 
-## 何时不触发
+## 前置
 
-以下场景**不要**触发该 skill：
-
-- 用户只是要一段文案（不需要视频）
-- 用户只是要标题或选题列表
-- 用户只是要运营分析或策略建议
-- 用户没有明确要"生成视频"
-- 用户要编辑已有视频
+1. 先跑 `chanjing-credentials-guard`，`~/.chanjing/credentials.json` 含 `app_id`、`secret_key`。
+2. 渲染必填：`export CHAN_SKILLS_DIR="/path/to/chan-skills"`（chan-skills 仓库根目录）。
+3. 规划/文案/分镜为本地逻辑，**无需**外部 LLM API key。
 
 ---
 
-## 前置条件
+## 环境变量（摘要）
 
-本 skill 已内置在 [chan-skills](https://github.com/chanjing-ai/chan-skills) 仓库中，与其他 skill 共享同一套蝉镜凭证，无需额外安装。
+| 类别 | 变量 |
+|------|------|
+| 路径 | `CHAN_SKILLS_DIR`（必填，渲染） |
+| 数字人 | `CHANJING_AVATAR_GENDER`、`CHANJING_VOICE_ID`、`CHANJING_AVATAR_ID` 或 `CHANJING_PERSON_ID`、`CHANJING_FIGURE_TYPE`、`CHANJING_FIGURE_SOURCE`（`common` / `customised` / `auto`） |
+| AI 画面 | `AI_VIDEO_MODEL`（默认 `Doubao-Seedance-1.0-pro`）；另有 `AI_IMAGE_MODEL`、`AI_VIDEO_I2V_MODEL` 等见各蝉镜 skill |
+| 默认输入 | `DEFAULT_PLATFORM`、`DEFAULT_DURATION`、`DEFAULT_STYLE` |
+| 调试 | `STUB_MODE=1` 不调真实 API；`LOG_LEVEL` |
 
-**唯一必填项：** 蝉镜凭证（`~/.chanjing/credentials.json`），格式：
-
-```json
-{"app_id": "你的app_id", "secret_key": "你的secret_key"}
-```
-
-如尚未配置，运行 `chanjing-credentials-guard` 可引导完成配置。
-
-**可选配置：**
-
-```bash
-export DEERAPI_API_KEY="sk-..."          # 独立调用 LLM 时使用（在 OpenClaw 等 AI 平台中不需要）
-export CHANJING_AVATAR_GENDER="Female"   # 公共数字人性别偏好（Male/Female）
-export CHANJING_VOICE_ID="..."           # 指定 TTS 音色 ID（留空自动选数字人默认音色）
-export AI_VIDEO_MODEL="Doubao-Seedance-1.0-pro"  # AI 视频生成模型
-export DEFAULT_PLATFORM="douyin"
-export DEFAULT_DURATION="60"
-export STUB_MODE="1"                     # 测试模式，不调用真实 API
-```
+指定 `avatar_id` / 环境里的 person id 时，会先对照 `list_figures`；`create_task` / `poll_task` 失败会**同一整段 TTS 下**依次换列表中其它形象重试。
 
 ---
 
-## 输入参数
+## 硬性约束（与脚本一致）
 
-### 必填
+1. **先定稿再渲染**：确认 plan / 全文 / 分镜后再开渲染，中途不改方向。  
+2. **整篇一次 TTS**，再按比例切段；禁止按镜头单独 TTS。  
+3. **混合分镜**：首尾优先数字人；中间奇数偏数字人、偶数偏 AI 画面（脚本内实现）。  
+4. AI 镜头仅 overlay 切段音频，**不走** avatar 唇形驱动。  
+5. 云端可并行提交；**CDN 下载串行**，降 429。  
+6. 失败只在**当前步骤**降级/重试，不回滚已完成步骤。
 
-| 参数 | 类型 | 说明 |
+---
+
+## 输入
+
+| 字段 | 必填 | 说明 |
 |------|------|------|
-| `topic` | string | 视频选题，需要明确具体（不少于 5 个字）|
-
-### 可选
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `industry` | string | `""` | 行业，如"家装"、"AI/企业服务" |
-| `platform` | string | `"douyin"` | 目标平台：`douyin` / `shipinhao` / `xiaohongshu` |
-| `style` | string | `"观点型口播"` | 视频风格：干货 / 观点 / 种草 / 口播 |
-| `duration_sec` | int | `60` | 视频时长：30 / 60 / 90（秒）|
-| `use_avatar` | bool | `true` | 是否使用数字人口播 |
+| `topic` | 是 | 明确选题，建议 ≥5 字 |
+| `industry` | 否 | 行业 |
+| `platform` | 否 | `douyin` / `shipinhao` / `xiaohongshu`，默认 `douyin` |
+| `style` | 否 | 默认 `观点型口播` |
+| `duration_sec` | 否 | 30 / 60 / 90，默认 60 |
+| `use_avatar` | 否 | 默认 true |
+| `strict_validation` | 否 | 默认 true；模糊选题可失败 |
+| `allow_auto_expand_topic` | 否 | 默认 false |
+| `max_retry_per_step` | 否 | 渲染步重试，默认 1 |
 
 ---
 
-## 输出结果
+## 输出 JSON（结构）
 
-统一返回 JSON 结构：
-
-```json
-{
-  "status": "success | partial | failed",
-  "video_plan": { ... },
-  "script_result": {
-    "title": "视频标题",
-    "hook": "开场钩子",
-    "full_script": "完整口播文案",
-    "cta": "结尾行动号召"
-  },
-  "storyboard_result": {
-    "scenes": [
-      {
-        "scene_id": 1,
-        "duration_sec": 10,
-        "voiceover": "口播文本",
-        "subtitle": "字幕文本",
-        "visual_prompt": "画面描述",
-        "use_avatar": true
-      }
-    ]
-  },
-  "render_result": {
-    "video_file": "/tmp/output.mp4",
-    "scene_video_urls": ["...", "..."],
-    "render_path": "mixed_dh_ai | all_dh | stub"
-  },
-  "error": null,
-  "debug": {
-    "steps": { "plan_sec": 7, "script_sec": 13, "storyboard_sec": 16, "render_sec": 480 },
-    "total_sec": 516
-  }
-}
-```
-
-即使渲染失败，也会尽可能返回已生成的文案和分镜（`status: "partial"`）。
+`status`: `success` | `partial` | `failed`；含 `video_plan`、`script_result`（title / hook / full_script / cta）、`storyboard_result.scenes[]`（scene_id、duration_sec、voiceover、subtitle、visual_prompt、use_avatar、image_prompt、i2v_prompt）、`render_result`（`video_file`、`scene_video_urls`、`render_path`、`degrade_log`）、`error`、`debug.steps` / `total_sec`。渲染失败时仍尽量返回已生成的文案与分镜。
 
 ---
 
-## 执行方式
-
-### 直接调用主脚本
+## 命令行
 
 ```bash
-# 基础用法
+export CHAN_SKILLS_DIR="/path/to/chan-skills"
+
 python scripts/run_workflow.py --topic "为什么现在很多老板开始重视 AI agent"
 
-# 完整参数
 python scripts/run_workflow.py \
-  --topic "家装公司怎么用短视频获客" \
-  --industry "家装" \
-  --platform douyin \
-  --style 干货 \
-  --duration 60 \
-  --output result.json
+  --topic "家装公司怎么用短视频获客" --industry "家装" \
+  --platform douyin --duration 60 --output result.json
 
-# 从 JSON 文件输入
 python scripts/run_workflow.py --input examples/example_input_1.json
 
-# Stub 模式（不调用真实 API，用于测试）
-STUB_MODE=1 python scripts/run_workflow.py --topic "AI agent 如何改变企业运营"
+STUB_MODE=1 python scripts/run_workflow.py --topic "测试选题足够长用于校验"
+
+# 与 JSON 字段对应
+python scripts/run_workflow.py --topic "选题足够长" --no-strict-validation
+python scripts/run_workflow.py --topic "模糊" --allow-expand-topic
+python scripts/run_workflow.py --topic "选题足够长" --max-retry 2
 ```
 
-### 在 Claude Code 中使用
-
-```
-请根据选题"家装公司怎么用短视频获客"生成一个 60 秒的抖音口播视频
-```
-
-Claude Code 会：
-1. 读取本 SKILL.md
-2. 调用 `scripts/run_workflow.py`
-3. 展示生成的文案、分镜和本地视频文件路径
+自然语言触发示例：`根据选题「家装公司怎么用短视频获客」生成 60 秒抖音口播视频` → 读本文并执行 `run_workflow.py`，回传文案、分镜与本地视频路径。
 
 ---
 
-## 渲染路径说明
+## 依赖的其它 Skills
 
-本 skill 采用「整篇一次性 TTS → 按镜头切割 → 数字人+AI 混合渲染」策略：
-
-### 为什么用整篇 TTS
-
-逐镜头 TTS 会在每个镜头边界处重置语调，导致语气断裂。整篇一次性 TTS 生成连贯自然的音频，再按各镜头口播文字的字符数比例切割为独立 WAV 段，分别交给各镜头使用。B-roll 只做音频 overlay，不经过 avatar 驱动，避免错误地驱动 AI 生成的画面。
-
-| 镜头类型 | 分配规则 | 渲染方式 |
-|---------|---------|---------|
-| 数字人（DH） | 第 1 段、最后 1 段，以及奇数编号的中间段 | `chanjing-video-compose` 音频驱动（上传 WAV，唇型精准匹配） |
-| AI 画面 | 偶数编号的中间段 | `chanjing-ai-creation`（文生视频）+ 本地 WAV 直接合成（不走 avatar） |
-
-所有场景**并行提交**云端任务，CDN 下载阶段使用串行信号量（避免 Chanjing CDN 限流）。最终由 ffmpeg concat 合成本地 mp4。
-
-**典型耗时（5 段 60s 视频）：**
-
-| 阶段 | 耗时 |
-|------|------|
-| LLM（规划+文案+分镜） | ~36s |
-| 云端并行生成（DH+AI） | ~2min |
-| CDN 串行下载 + ffmpeg | ~5-10min |
-| **总计** | **~8-12min** |
+| Skill | 作用 |
+|-------|------|
+| `chanjing-credentials-guard` | 鉴权（前置） |
+| `chanjing-video-compose` | 数字人 + 音频驱动合成 |
+| `chanjing-tts` | 整篇口播转音频 |
+| `chanjing-ai-creation` | AI 画面（文生视频等） |
 
 ---
 
-## 与其他蝉镜 Skills 的依赖关系
+## 验收要点
 
-| Skill | 用途 | 必填 |
-|-------|------|------|
-| `chanjing-video-compose` | 公共数字人 + TTS 视频合成 | 是 |
-| `chanjing-tts` | AI 画面镜头的独立配音 | 是 |
-| `chanjing-ai-creation` | AI 视频生成（Doubao-Seedance） | 是 |
-| `chanjing-credentials-guard` | 鉴权 | 是（前置） |
+凭证与 `CHAN_SKILLS_DIR` 就绪 → 输入校验通过 → 产出 plan / 全文 / 分镜 → 整篇 TTS 与切段 → 混合渲染与本地 mp4 → 返回 JSON（含 `status`、`render_result`、`debug`）。
 
 ---
 
-## 错误处理
+## 限制
 
-- **输入过于模糊**：直接返回提示，不进入生成流程
-- **文案/分镜生成失败**：返回已完成阶段 + 失败原因（`status: partial`）
-- **AI 画面镜头失败**：自动降级为数字人（保证最终有视频输出）
-- **渲染全部失败**：仍然返回文案和分镜，不丢失成果
-- **鉴权失败**：提示用户检查 `~/.chanjing/credentials.json`
-
----
-
-## 已知限制
-
-1. 最终视频为**本地 mp4 文件**，暂不自动上传（CDN 上传接口待接入）
-2. AI 画面视频时长受模型限制（5-10s），超长镜头由 ffmpeg loop 补足
-3. CDN 下载为串行（避免限流），5 段视频约 5-10 分钟
-4. 分镜数量由 video_plan 决定，通常 4-6 段
+本地 mp4，不自动上传；AI 单段时长受模型限制（脚本内夹到 5–10s，过长用 loop 补）；分镜段数通常随 plan 为 4–6 段。

@@ -1,100 +1,114 @@
-# 鉴权：与 chanjing-credentials-guard 使用同一配置文件（CONFIG_DIR/credentials.json）
-# 无 AK/SK 时执行 open_login_page 脚本打开注册/登录页
+"""
+Auth helper — follows the exact same pattern used by other chan-skills.
+Reads credentials from ~/.chanjing/credentials.json (or CHANJING_CONFIG_DIR).
+Auto-refreshes access_token when it is within 5 minutes of expiry.
+"""
+
+from __future__ import annotations
 import json
 import os
-import subprocess
-import sys
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 
+
 CONFIG_DIR = Path(os.environ.get("CHANJING_CONFIG_DIR", Path.home() / ".chanjing"))
-CONFIG_FILE = CONFIG_DIR / "credentials.json"
+CREDENTIALS_FILE = CONFIG_DIR / "credentials.json"
 API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
-BUFFER_SECONDS = 300
-LOGIN_URL = "https://www.chanjing.cc/openapi/login"
-
-NO_CREDENTIALS_MSG = """已在浏览器打开蝉镜登录/注册页。
-获取秘钥后请执行：
-  python skills/chanjing-credentials-guard/scripts/chanjing-config --ak <你的app_id> --sk <你的secret_key>
-设置完毕后请重新执行您之前的操作。"""
+TOKEN_BUFFER_SECS = 300   # refresh 5 min before expiry
 
 
-def _run_open_login_page():
-    """执行 credentials-guard 的 open_login_page 脚本，在默认浏览器打开注册/登录页。"""
+def _load_credentials() -> dict:
+    if not CREDENTIALS_FILE.exists():
+        return {}
     try:
-        skills_dir = Path(__file__).resolve().parent.parent.parent
-        script = skills_dir / "chanjing-credentials-guard" / "scripts" / "open_login_page"
-        if script.exists():
-            subprocess.run([sys.executable, str(script)], check=False, timeout=5)
-        else:
-            import webbrowser
-
-            webbrowser.open(LOGIN_URL)
+        return json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
     except Exception:
-        try:
-            import webbrowser
-
-            webbrowser.open(LOGIN_URL)
-        except Exception:
-            pass
+        return {}
 
 
-def read_config():
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def write_config(data):
+def _save_credentials(creds: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    CREDENTIALS_FILE.write_text(
+        json.dumps(creds, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
-def get_token():
-    """返回 (token, None) 或 (None, error_msg)。"""
-    data = read_config()
-    app_id = (data.get("app_id") or "").strip()
-    secret_key = (data.get("secret_key") or "").strip()
+def _fetch_token(app_id: str, secret_key: str) -> tuple[str, int]:
+    """Call /open/v1/access_token and return (token, expire_in_unix)."""
+    url = f"{API_BASE}/open/v1/access_token"
+    payload = json.dumps({"app_id": app_id, "secret_key": secret_key}).encode()
+    req = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = json.loads(resp.read().decode())
+    if body.get("code") != 0:
+        raise RuntimeError(f"Token fetch failed: {body.get('msg')}")
+    d = body["data"]
+    return d["access_token"], int(d["expire_in"])
+
+
+def get_token() -> tuple[str | None, str | None]:
+    """
+    Returns (token, None) on success, or (None, error_message) on failure.
+    Caller should always check the second element.
+    """
+    creds = _load_credentials()
+    app_id = creds.get("app_id", "")
+    secret_key = creds.get("secret_key", "")
+
     if not app_id or not secret_key:
-        _run_open_login_page()
-        return None, NO_CREDENTIALS_MSG
+        return None, (
+            "蝉镜凭证未配置。请先运行 chanjing-credentials-guard 或执行：\n"
+            "  chanjing-config --ak <ACCESS_KEY> --sk <SECRET_KEY>"
+        )
 
-    now = int(time.time())
-    token = data.get("access_token")
-    expire_in = data.get("expire_in")
-    try:
-        expire_in = int(expire_in) if expire_in is not None else 0
-    except (ValueError, TypeError):
-        expire_in = 0
+    expire_in = creds.get("expire_in", 0)
+    token = creds.get("access_token", "")
 
-    if token and expire_in > now + BUFFER_SECONDS:
+    if token and time.time() < expire_in - TOKEN_BUFFER_SECS:
         return token, None
 
-    url = API_BASE + "/open/v1/access_token"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"app_id": app_id, "secret_key": secret_key}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    # Need to refresh
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        return None, str(e)
+        token, expire_in = _fetch_token(app_id, secret_key)
+    except Exception as exc:
+        return None, f"Token 刷新失败: {exc}"
 
-    if body.get("code") != 0:
-        return None, body.get("msg", "获取 Token 失败")
+    creds["access_token"] = token
+    creds["expire_in"] = expire_in
+    _save_credentials(creds)
+    return token, None
 
-    d = body.get("data", {})
-    new_token = d.get("access_token")
-    if not new_token:
-        return None, "API 返回无 access_token"
 
-    data["access_token"] = new_token
-    data["expire_in"] = d.get("expire_in")
-    write_config(data)
-    return new_token, None
+def api_post(path: str, payload: dict, token: str) -> dict:
+    """POST to Chanjing API and return parsed response dict."""
+    url = f"{API_BASE}{path}"
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "access_token": token,
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def api_get(path: str, params: dict, token: str) -> dict:
+    """GET from Chanjing API and return parsed response dict."""
+    from urllib.parse import urlencode
+    url = f"{API_BASE}{path}"
+    if params:
+        url = f"{url}?{urlencode(params)}"
+    req = urllib.request.Request(
+        url, method="GET",
+        headers={"access_token": token},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))

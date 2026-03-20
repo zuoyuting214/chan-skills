@@ -32,6 +32,7 @@ CTA：{cta}
 - `"use_avatar": true` 时：数字人画面风格描述，例如"数字人正面口播，简洁商务背景，重点词大字幕"
 - `"use_avatar": false` 时：用**英文**写 AI 视频生成 prompt，描述具体场景、动态画面、氛围，30-60 词，例如：
   "A Chinese business owner reviewing AI automation reports on a laptop in a modern office, warm lighting, cinematic close-up shots, vertical 9:16 format, no text"
+- **人物族裔（必守）**：凡画面中出现人物（含背影、侧脸、剪影、群像），一律按**中国人/东亚面孔、国内日常着装与场景**描写；勿默认欧美模特；无人物时可写纯环境/物体/数据可视化。
 
 输出如下 JSON：
 

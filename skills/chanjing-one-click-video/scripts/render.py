@@ -1,23 +1,6 @@
 """
-Module E: Render Orchestrator — Mixed Digital Human + AI Video Pipeline
-
-渲染流程（新架构）：
-  1. 用整篇文案一次性生成完整 TTS 音频（保证语流连贯、语气自然）
-  2. 按各镜头口播文字比例，将完整音频切割为 N 段 WAV
-  3. 所有镜头并行渲染：
-     use_avatar=True  → 上传对应 WAV → chanjing-video-compose 音频驱动（准确唇型）
-     use_avatar=False → chanjing-ai-creation（AI 视频）+ 本地 WAV 合成（不走唇型驱动）
-  4. ffmpeg concat 所有片段 → result.mp4（本地文件）
-
-这样 B-roll 不会被 avatar 驱动，A-roll 的唇型与实际播出音频完全一致，
-整篇语调自然连贯，CDN 下载只在 DH 视频和 AI 视频下载时发生（均串行）。
-
-配置环境变量：
-  CHAN_SKILLS_DIR         chan-skills/skills 目录路径（可选，默认从本文件位置自动推导）
-  CHANJING_VOICE_ID       TTS audio_man ID（留空自动取数字人默认音色）
-  CHANJING_AVATAR_GENDER  公共数字人性别偏好 Male/Female（默认 Female）
-  AI_VIDEO_MODEL          AI 视频生成模型（默认 Doubao-Seedance-1.0-pro）
-  STUB_MODE               =1 跳过真实调用
+混合渲染：整篇 TTS → 按分镜切 WAV → 数字人（音频驱动）/ AI 文生视频 + 切段合成 → ffmpeg 拼接。
+环境变量与业务约束见同级 SKILL.md；本模块仅实现编排与 ffmpeg。
 """
 
 from __future__ import annotations
@@ -28,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from schemas import VideoPlan, ScriptResult, StoryboardResult, RenderResult, Scene
@@ -36,6 +20,7 @@ from utils import get_logger, timed
 logger = get_logger("render")
 
 AVATAR_GENDER       = os.environ.get("CHANJING_AVATAR_GENDER", "Female").lower()
+FIGURE_SOURCE       = os.environ.get("CHANJING_FIGURE_SOURCE", "auto").strip().lower()
 AI_VIDEO_MODEL      = os.environ.get("AI_VIDEO_MODEL", "Doubao-Seedance-1.0-pro")
 OUTPUT_W            = 1080
 OUTPUT_H            = 1920
@@ -47,22 +32,8 @@ CDN_MAX_CONCURRENT  = 1      # CDN 串行下载（避免 Chanjing CDN 限流）
 _cdn_semaphore = threading.Semaphore(CDN_MAX_CONCURRENT)
 
 
-# ---------------------------------------------------------------------------
-# GPU 编码器探测（模块加载时执行一次）
-# ---------------------------------------------------------------------------
-
 def _probe_video_encoder() -> tuple[str, list[str]]:
-    """
-    按优先级探测可用的硬件视频编码器，返回 (codec, quality_args)。
-    结果在模块加载时缓存，整个进程内复用。
-
-    优先级：
-      1. h264_videotoolbox — macOS VideoToolbox（Apple Silicon / Intel Mac）
-      2. h264_nvenc        — NVIDIA GPU
-      3. h264_qsv          — Intel Quick Sync
-      4. h264_amf          — AMD GPU
-      5. libx264           — CPU 软件编码（兜底）
-    """
+    """探测硬件编码器（videotoolbox / nvenc / qsv / amf），失败则用 libx264。"""
     candidates = [
         ("h264_videotoolbox", ["-q:v", "65"]),
         ("h264_nvenc",        ["-preset", "p4", "-cq", "23"]),
@@ -91,26 +62,17 @@ def _probe_video_encoder() -> tuple[str, list[str]]:
 _VIDEO_CODEC, _VIDEO_QUALITY_ARGS = _probe_video_encoder()
 
 
-# ---------------------------------------------------------------------------
-# chan-skills 路径解析
-# ---------------------------------------------------------------------------
-
 def _skills_root() -> Path:
-    # 优先使用环境变量（向后兼容）；否则从本文件位置自动推导：
-    # scripts/ → chanjing-one-click-video/ → skills/
     d = os.environ.get("CHAN_SKILLS_DIR", "")
-    if d:
-        p = Path(d)
-        if not p.is_dir():
-            raise RuntimeError(f"CHAN_SKILLS_DIR 路径不存在: {p}")
-        return p
-    inferred = Path(__file__).resolve().parent.parent.parent
-    if not inferred.is_dir():
+    if not d:
         raise RuntimeError(
-            "无法自动推导 chan-skills 路径，请手动设置：\n"
-            "  export CHAN_SKILLS_DIR=/path/to/chan-skills/skills"
+            "CHAN_SKILLS_DIR 未设置。请指向 chan-skills 仓库根目录：\n"
+            "  export CHAN_SKILLS_DIR=/path/to/chan-skills"
         )
-    return inferred
+    p = Path(d)
+    if not p.is_dir():
+        raise RuntimeError(f"CHAN_SKILLS_DIR 路径不存在: {p}")
+    return p
 
 
 def _script(skill: str, name: str) -> Path:
@@ -123,10 +85,6 @@ def _script(skill: str, name: str) -> Path:
             return candidate
     raise FileNotFoundError(f"找不到脚本 {skill}/scripts/{name}")
 
-
-# ---------------------------------------------------------------------------
-# 子进程调用
-# ---------------------------------------------------------------------------
 
 def _run(script: Path, args: list[str], label: str = "") -> str:
     """运行脚本，返回 stdout（strip）。失败时抛出 RuntimeError。"""
@@ -142,10 +100,6 @@ def _run(script: Path, args: list[str], label: str = "") -> str:
     logger.debug("◁ %s → %s", label or script.name, out[:120])
     return out
 
-
-# ---------------------------------------------------------------------------
-# ffmpeg / ffprobe 工具
-# ---------------------------------------------------------------------------
 
 def _ffmpeg(*args: str, label: str = "") -> None:
     """运行 ffmpeg，失败时抛出 RuntimeError。超时 30 分钟（覆盖大文件 CDN 下载场景）。"""
@@ -262,10 +216,6 @@ def _concat_clips(clips: list[Path]) -> Path:
     return Path(out.name)
 
 
-# ---------------------------------------------------------------------------
-# Stub
-# ---------------------------------------------------------------------------
-
 def _stub_render(plan: VideoPlan, storyboard: StoryboardResult) -> RenderResult:
     logger.info("[STUB] 跳过真实渲染，返回占位结果")
     return RenderResult(
@@ -274,62 +224,180 @@ def _stub_render(plan: VideoPlan, storyboard: StoryboardResult) -> RenderResult:
         tts_urls=[f"https://example.com/stub-tts-{s.scene_id}.mp3" for s in storyboard.scenes],
         scene_video_urls=[f"https://example.com/stub-scene-{s.scene_id}.mp4" for s in storyboard.scenes],
         render_path="stub",
+        degrade_log=[],
     )
 
 
-# ---------------------------------------------------------------------------
-# 数字人参数解析
-# ---------------------------------------------------------------------------
+@dataclass
+class ResolvedFigureCandidates:
+    """数字人候选 (person_id, figure_type, audio_man_id)，按顺序重试。"""
 
-def _resolve_figure() -> tuple[str, str, str]:
-    """
-    返回 (person_id, figure_type, audio_man_id)。
-    按 CHANJING_AVATAR_GENDER 偏好选择性别，否则取第一个。
-    若设置了 CHANJING_VOICE_ID，audio_man_id 用该值覆盖。
-    """
+    candidates: list[tuple[str, str, str]]
+    source: str  # common | customised
+
+    @property
+    def primary(self) -> tuple[str, str, str]:
+        return self.candidates[0]
+
+    def audio_man_for_tts(self) -> str:
+        """整篇 TTS 音色：环境变量优先，否则首选形象的 audio_man。"""
+        env_voice = os.environ.get("CHANJING_VOICE_ID", "").strip()
+        if env_voice:
+            return env_voice
+        _pid, _ft, am = self.primary
+        if not am:
+            raise RuntimeError(
+                "当前首选数字人未返回 audio_man_id，且未设置 CHANJING_VOICE_ID。"
+                "请设置 CHANJING_VOICE_ID，或换一个有绑定音色的公共数字人。"
+            )
+        return am
+
+
+def _list_figures_payload(source: str) -> dict:
     raw = _run(
         _script("chanjing-video-compose", "list_figures"),
-        ["--source", "common", "--json"],
-        label="list_figures",
+        ["--source", source, "--json"],
+        label=f"list_figures {source}",
     )
-    data = json.loads(raw)
-    items = data.get("data", {}).get("list", [])
-    if not items:
-        raise RuntimeError("没有可用的公共数字人形象")
+    return json.loads(raw)
 
+
+def _parse_figure_rows(payload: dict, source: str) -> list[dict]:
+    """从 list_figures --json 解析为统一行结构。"""
+    inner = payload.get("data") or {}
+    items = inner.get("list", []) or []
     rows: list[dict] = []
-    for item in items:
-        for figure in item.get("figures", []):
+    if source == "common":
+        for item in items:
+            for figure in item.get("figures", []) or []:
+                rows.append({
+                    "person_id": item.get("id", ""),
+                    "figure_type": (figure.get("type") or "").strip(),
+                    "audio_man_id": (item.get("audio_man_id") or "").strip(),
+                    "gender": (item.get("gender") or "").lower(),
+                    "name": (item.get("name") or "").strip(),
+                })
+    else:
+        for item in items:
             rows.append({
-                "person_id":    item.get("id", ""),
-                "figure_type":  figure.get("type", ""),
-                "audio_man_id": item.get("audio_man_id", ""),
-                "gender":       item.get("gender", "").lower(),
+                "person_id": (item.get("id") or "").strip(),
+                "figure_type": (item.get("figure_type") or "").strip(),
+                "audio_man_id": (item.get("audio_man_id") or "").strip(),
+                "gender": (item.get("gender") or "").lower(),
+                "name": (item.get("name") or "").strip(),
             })
+    return [r for r in rows if r["person_id"]]
+
+
+def _apply_voice_override(rows: list[dict]) -> list[dict]:
+    override = os.environ.get("CHANJING_VOICE_ID", "").strip()
+    if not override:
+        return rows
+    out = []
+    for r in rows:
+        r2 = dict(r)
+        r2["audio_man_id"] = override
+        out.append(r2)
+    return out
+
+
+def _dedupe_candidate_order(rows: list[dict], primary: dict) -> list[dict]:
+    """primary 在前，其余按原顺序去重 (person_id, figure_type)。"""
+
+    def key(r: dict) -> tuple[str, str]:
+        return r["person_id"], r["figure_type"]
+
+    seen = {key(primary)}
+    ordered = [primary]
+    for r in rows:
+        k = key(r)
+        if k in seen:
+            continue
+        seen.add(k)
+        ordered.append(r)
+    return ordered
+
+
+def _resolve_figure(plan: VideoPlan) -> ResolvedFigureCandidates:
+    """list_figures → 校验显式 id → 排序候选；CHANJING_VOICE_ID 覆盖各候选音色。"""
+    explicit_person = (
+        (plan.avatar_id or "").strip()
+        or os.environ.get("CHANJING_AVATAR_ID", "").strip()
+        or os.environ.get("CHANJING_PERSON_ID", "").strip()
+    )
+    explicit_figure = os.environ.get("CHANJING_FIGURE_TYPE", "").strip()
+
+    sources: list[str] = []
+    if FIGURE_SOURCE == "common":
+        sources = ["common"]
+    elif FIGURE_SOURCE == "customised":
+        sources = ["customised"]
+    else:
+        sources = ["common", "customised"]
+
+    last_err: str | None = None
+    rows: list[dict] = []
+    used_source = "common"
+
+    for src in sources:
+        try:
+            payload = _list_figures_payload(src)
+        except Exception as exc:
+            last_err = str(exc)
+            logger.warning("list_figures %s 失败: %s", src, exc)
+            continue
+        rows = _apply_voice_override(_parse_figure_rows(payload, src))
+        used_source = src
+        if rows:
+            break
+        logger.warning("list_figures %s 返回 0 条可用形象", src)
 
     if not rows:
-        raise RuntimeError("公共数字人列表为空（figures 字段缺失）")
+        hint = (
+            "无法获取可用数字人列表。请确认：1) 账号已开通视频合成与公共/定制数字人；"
+            "2) 运行 `python skills/chanjing-video-compose/scripts/list_figures --source common --json` 自查；"
+            "3) 如需只用定制形象，设置 CHANJING_FIGURE_SOURCE=customised。"
+        )
+        if last_err:
+            hint += f" 最近一次接口错误: {last_err}"
+        raise RuntimeError(hint)
 
-    preferred = [r for r in rows if AVATAR_GENDER in r["gender"]]
-    chosen = preferred[0] if preferred else rows[0]
+    primary: dict | None = None
+    if explicit_person:
+        matches = [r for r in rows if r["person_id"] == explicit_person]
+        if explicit_figure:
+            matches = [r for r in matches if r["figure_type"] == explicit_figure]
+        if not matches:
+            raise RuntimeError(
+                f"数字人校验失败：person_id={explicit_person!r} 不在当前列表中（来源={used_source}），"
+                f"或形态 CHANJING_FIGURE_TYPE={explicit_figure!r} 不匹配。"
+                f"当前共 {len(rows)} 条形象。请用 list_figures --source {used_source} --json 核对 id 与 figure_type；"
+                f"合成失败时会自动依次尝试列表中的其它形象。"
+            )
+        primary = matches[0]
+        logger.info(
+            "已校验指定数字人: person_id=%s, figure_type=%s, source=%s",
+            primary["person_id"], primary["figure_type"] or "(默认)", used_source,
+        )
+    else:
+        preferred = [r for r in rows if AVATAR_GENDER in r["gender"]]
+        primary = preferred[0] if preferred else rows[0]
+        logger.info(
+            "自动选择数字人: person_id=%s, figure_type=%s, source=%s（性别偏好=%s）",
+            primary["person_id"], primary["figure_type"] or "(默认)", used_source, AVATAR_GENDER,
+        )
 
-    audio_man_id = os.environ.get("CHANJING_VOICE_ID", "").strip() or chosen["audio_man_id"]
+    ordered = _dedupe_candidate_order(rows, primary)
+    candidates = [(r["person_id"], r["figure_type"], r["audio_man_id"]) for r in ordered]
     logger.info(
-        "选择公共数字人: person_id=%s, figure_type=%s, audio_man_id=%s",
-        chosen["person_id"], chosen["figure_type"], audio_man_id,
+        "数字人候选共 %d 个（合成失败时将依次尝试其它 id）",
+        len(candidates),
     )
-    return chosen["person_id"], chosen["figure_type"], audio_man_id
+    return ResolvedFigureCandidates(candidates=candidates, source=used_source)
 
-
-# ---------------------------------------------------------------------------
-# 整篇一次性 TTS
-# ---------------------------------------------------------------------------
 
 def _generate_full_tts(full_script: str, audio_man_id: str) -> Path:
-    """
-    用整篇文案生成一条完整 TTS 音频，下载到本地 WAV 文件。
-    一次调用覆盖全片，保证语气连贯、不在镜头切换处重置语调。
-    """
+    """整篇一次 TTS → 本地 WAV。"""
     logger.info("[TTS] 生成整篇完整音频（一次性）…")
     task_id = _run(
         _script("chanjing-tts", "create_task"),
@@ -354,15 +422,8 @@ def _generate_full_tts(full_script: str, audio_man_id: str) -> Path:
     return Path(out.name)
 
 
-# ---------------------------------------------------------------------------
-# 按镜头比例切割音频
-# ---------------------------------------------------------------------------
-
 def _split_audio_by_scenes(wav_path: Path, scenes: list[Scene]) -> list[Path]:
-    """
-    按各镜头口播文字的字符数比例，将完整 WAV 切割为 N 段。
-    返回与 scenes 等长的本地 WAV 路径列表。
-    """
+    """按各镜口播字数比例切分 WAV，长度与 scenes 一致。"""
     total_duration = _get_audio_duration(wav_path)
     total_chars = sum(len(s.voiceover) for s in scenes) or 1
 
@@ -400,10 +461,6 @@ def _split_audio_by_scenes(wav_path: Path, scenes: list[Scene]) -> list[Path]:
     return segments
 
 
-# ---------------------------------------------------------------------------
-# 镜头渲染：数字人（音频驱动）
-# ---------------------------------------------------------------------------
-
 def _upload_scene_audio(wav_path: Path) -> str:
     """上传 WAV 文件到蝉镜文件存储，返回 file_id。"""
     file_id = _run(
@@ -414,40 +471,43 @@ def _upload_scene_audio(wav_path: Path) -> str:
     return file_id.strip()
 
 
-def _render_dh_scene(person_id: str, figure_type: str, audio_man_id: str,
-                     scene: Scene, wav_path: Path | None = None) -> Path:
-    """
-    生成数字人口播片段。
-    wav_path 不为 None 时：上传 WAV → 音频驱动（唇型与实际播出音频一致）。
-    wav_path 为 None 时（降级）：文本驱动模式。
-    最后 ffmpeg normalize → 本地 mp4。
-    """
+def _render_dh_scene_once(
+    person_id: str,
+    figure_type: str,
+    audio_man_id: str,
+    scene: Scene,
+    wav_path: Path | None = None,
+) -> Path:
+    """wav_path 有则音频驱动，无则文本驱动（降级）。"""
+    task_args = ["--person-id", person_id, "--subtitle", "show"]
+    if figure_type:
+        task_args.extend(["--figure-type", figure_type])
+
     if wav_path is not None:
-        logger.info("  [DH] Scene %d: 上传音频 → 音频驱动…", scene.scene_id)
+        logger.info(
+            "  [DH] Scene %d: 上传音频 → 音频驱动（person=%s figure=%s）…",
+            scene.scene_id,
+            person_id[:8] + "…" if len(person_id) > 8 else person_id,
+            figure_type or "-",
+        )
         file_id = _upload_scene_audio(wav_path)
-        video_id = _run(
-            _script("chanjing-video-compose", "create_task"),
-            [
-                "--person-id", person_id,
-                "--figure-type", figure_type,
-                "--audio-file-id", file_id,
-                "--subtitle", "show",
-            ],
-            label=f"create_task scene{scene.scene_id}",
-        )
+        task_args.extend(["--audio-file-id", file_id])
     else:
-        logger.info("  [DH] Scene %d: 文本驱动（降级）…", scene.scene_id)
-        video_id = _run(
-            _script("chanjing-video-compose", "create_task"),
-            [
-                "--person-id", person_id,
-                "--figure-type", figure_type,
-                "--text", scene.voiceover,
-                "--audio-man", audio_man_id,
-                "--subtitle", "show",
-            ],
-            label=f"create_task scene{scene.scene_id}",
+        logger.info(
+            "  [DH] Scene %d: 文本驱动（降级）person=%s figure=%s…",
+            scene.scene_id,
+            person_id[:8] + "…" if len(person_id) > 8 else person_id,
+            figure_type or "-",
         )
+        if not audio_man_id:
+            raise RuntimeError("文本驱动需要 audio_man_id，请设置 CHANJING_VOICE_ID 或换用有默认音色的形象")
+        task_args.extend(["--text", scene.voiceover, "--audio-man", audio_man_id])
+
+    video_id = _run(
+        _script("chanjing-video-compose", "create_task"),
+        task_args,
+        label=f"create_task scene{scene.scene_id}",
+    )
 
     video_url = _run(
         _script("chanjing-video-compose", "poll_task"),
@@ -456,6 +516,32 @@ def _render_dh_scene(person_id: str, figure_type: str, audio_man_id: str,
     )
     logger.info("  [DH] Scene %d URL 就绪: %s", scene.scene_id, video_url[:60])
     return _normalize(video_url)
+
+
+def _render_dh_scene(
+    resolved: ResolvedFigureCandidates,
+    scene: Scene,
+    wav_path: Path | None = None,
+) -> Path:
+    """按形象列表顺序重试；音频驱动时只换人、不换 WAV。"""
+    errors: list[str] = []
+    for i, (person_id, figure_type, audio_man_id) in enumerate(resolved.candidates):
+        try:
+            return _render_dh_scene_once(
+                person_id, figure_type, audio_man_id, scene, wav_path
+            )
+        except Exception as exc:
+            msg = f"候选{i + 1}/{len(resolved.candidates)} person_id={person_id!r} figure={figure_type!r}: {exc}"
+            logger.warning("  [DH] Scene %d 合成失败，将尝试下一形象: %s", scene.scene_id, msg)
+            errors.append(msg)
+
+    detail = "；".join(errors[:3])
+    if len(errors) > 3:
+        detail += f" …（共{len(errors)}次失败）"
+    raise RuntimeError(
+        f"数字人镜头 Scene {scene.scene_id} 在尝试 {len(resolved.candidates)} 个形象后仍失败。"
+        f"可检查 person_id 是否仍有效、账号权限或稍后重试。详情: {detail}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -472,12 +558,18 @@ def _render_ai_scene(scene: Scene, wav_path: Path) -> Path:
     logger.info("  [AI] Scene %d: 提交 AI 视频任务…", scene.scene_id)
     # 模型要求 video_duration ∈ [5, 10]；较长镜头由 ffmpeg loop 补足
     ai_duration = max(5, min(10, scene.duration_sec))
+    ip = (scene.image_prompt or "").strip()
+    iv = (scene.i2v_prompt or "").strip()
+    vp = (scene.visual_prompt or "").strip()
+    prompt = " ".join(p for p in (ip, iv) if p) or vp or (
+        "vertical 9:16 documentary b-roll, soft motion, no text"
+    )
     ai_unique_id = _run(
         _script("chanjing-ai-creation", "submit_task"),
         [
             "--creation-type", "4",
             "--model-code", AI_VIDEO_MODEL,
-            "--prompt", scene.visual_prompt,
+            "--prompt", prompt[:1200],
             "--aspect-ratio", "9:16",
             "--video-duration", str(ai_duration),
         ],
@@ -495,53 +587,51 @@ def _render_ai_scene(scene: Scene, wav_path: Path) -> Path:
     return _composite_video_audio(ai_video_url, wav_path)
 
 
-# ---------------------------------------------------------------------------
-# 主渲染路径：整篇 TTS → 切割 → 并行渲染 → concat
-# ---------------------------------------------------------------------------
-
 def _render_mixed(plan: VideoPlan, script: ScriptResult,
                   storyboard: StoryboardResult) -> RenderResult:
     logger.info("[Mixed] 开始混合渲染（整篇 TTS → 切割 → 数字人+AI 并行）…")
-    person_id, figure_type, audio_man_id = _resolve_figure()
+    resolved = _resolve_figure(plan)
+    audio_man_for_tts = resolved.audio_man_for_tts()
 
-    # Step 1: 整篇一次性 TTS → 本地 WAV
     with timed("full TTS", logger):
-        full_wav = _generate_full_tts(script.full_script, audio_man_id)
+        full_wav = _generate_full_tts(script.full_script, audio_man_for_tts)
 
-    # Step 2: 按文字比例切割为各镜头 WAV
     with timed("split audio", logger):
         scene_wavs = _split_audio_by_scenes(full_wav, storyboard.scenes)
 
-    # Step 3: 并行渲染所有镜头
-    def _render_scene(args: tuple[Scene, Path]) -> tuple[int, Path | None]:
+    def _render_scene(args: tuple[Scene, Path]) -> tuple[int, Path | None, list[str]]:
         scene, wav_path = args
+        notes: list[str] = []
         try:
             if scene.use_avatar:
-                clip = _render_dh_scene(person_id, figure_type, audio_man_id, scene, wav_path)
+                clip = _render_dh_scene(resolved, scene, wav_path)
             else:
                 clip = _render_ai_scene(scene, wav_path)
             logger.info("  Scene %d 完成 (%s)", scene.scene_id,
                         "DH" if scene.use_avatar else "AI")
-            return scene.scene_id, clip
+            return scene.scene_id, clip, notes
         except Exception as exc:
             logger.warning("  Scene %d 失败，降级为数字人文本驱动: %s", scene.scene_id, exc)
+            notes.append(f"scene_{scene.scene_id} render_failed: {exc}; dh_text_fallback")
             try:
-                clip = _render_dh_scene(person_id, figure_type, audio_man_id, scene)
+                clip = _render_dh_scene(resolved, scene, None)
                 logger.info("  Scene %d 降级成功 (DH text)", scene.scene_id)
-                return scene.scene_id, clip
+                return scene.scene_id, clip, notes
             except Exception as exc2:
                 logger.error("  Scene %d 完全失败: %s", scene.scene_id, exc2)
-                return scene.scene_id, None
+                notes.append(f"scene_{scene.scene_id} dh_fallback_failed: {exc2}")
+                return scene.scene_id, None, notes
 
     clips_by_id: dict[int, Path | None] = {}
     scene_args = list(zip(storyboard.scenes, scene_wavs))
+    degrade_log: list[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=SCENE_MAX_WORKERS) as pool:
         futures = {pool.submit(_render_scene, args): args[0] for args in scene_args}
         for future in concurrent.futures.as_completed(futures):
-            scene_id, clip = future.result()
+            scene_id, clip, notes = future.result()
             clips_by_id[scene_id] = clip
+            degrade_log.extend(notes)
 
-    # 按镜头顺序整理（跳过失败的）
     ordered_clips: list[Path] = []
     scene_video_paths: list[str] = []
     for scene in storyboard.scenes:
@@ -559,7 +649,6 @@ def _render_mixed(plan: VideoPlan, script: ScriptResult,
     with timed("ffmpeg concat", logger):
         final_path = _concat_clips(ordered_clips)
 
-    # 清理临时文件
     full_wav.unlink(missing_ok=True)
     for wav in scene_wavs:
         wav.unlink(missing_ok=True)
@@ -572,21 +661,18 @@ def _render_mixed(plan: VideoPlan, script: ScriptResult,
         video_file=str(final_path),
         scene_video_urls=scene_video_paths,
         render_path="mixed_dh_ai",
+        degrade_log=degrade_log,
     )
 
-
-# ---------------------------------------------------------------------------
-# 降级路径：全数字人文本驱动（当混合渲染整体失败时）
-# ---------------------------------------------------------------------------
 
 def _render_all_dh(plan: VideoPlan, script: ScriptResult,
                    storyboard: StoryboardResult) -> RenderResult:
     logger.info("[AllDH] 全数字人并行渲染（降级模式，文本驱动）…")
-    person_id, figure_type, audio_man_id = _resolve_figure()
+    resolved = _resolve_figure(plan)
 
     def _render_one(scene: Scene) -> tuple[int, Path | None]:
         try:
-            clip = _render_dh_scene(person_id, figure_type, audio_man_id, scene)
+            clip = _render_dh_scene(resolved, scene, None)
             return scene.scene_id, clip
         except Exception as exc:
             logger.warning("  Scene %d 失败（跳过）: %s", scene.scene_id, exc)
@@ -615,12 +701,9 @@ def _render_all_dh(plan: VideoPlan, script: ScriptResult,
         video_file=str(final_path),
         scene_video_urls=scene_video_paths,
         render_path="all_dh",
+        degrade_log=["mixed_render_failed; used all_dh fallback"],
     )
 
-
-# ---------------------------------------------------------------------------
-# 公共入口
-# ---------------------------------------------------------------------------
 
 def render_video(plan: VideoPlan, script: ScriptResult,
                  storyboard: StoryboardResult) -> RenderResult:

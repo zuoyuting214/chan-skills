@@ -1,24 +1,12 @@
-"""
-Module B: Video Plan Generator
-Calls LLM (via DeerAPI) to produce a structured video_plan from the user request.
-"""
+"""video_plan 生成（本地规则）。"""
 
 from __future__ import annotations
 import json
 import os
-from pathlib import Path
-
 from schemas import VideoRequest, VideoPlan
-from utils import get_logger, timed
-import _llm
+from utils import get_logger
 
 logger = get_logger("planners")
-
-TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
-
-
-def _load_template(name: str) -> str:
-    return (TEMPLATE_DIR / name).read_text(encoding="utf-8")
 
 
 def _stub_plan_response() -> str:
@@ -32,28 +20,28 @@ def _stub_plan_response() -> str:
     }, ensure_ascii=False)
 
 
-_extract_json = _llm.extract_json
+def _local_plan_response(request: VideoRequest) -> str:
+    scene_count = 5 if request.duration_sec >= 50 else 4
+    angle = f"{request.topic}的落地价值与可执行路径"
+    return json.dumps({
+        "audience": f"{request.industry or '通用行业'}从业者、业务负责人",
+        "core_angle": angle,
+        "video_type": "avatar_talking_head" if request.use_avatar else "mixed_dh_ai",
+        "scene_count": scene_count,
+        "tone": "清晰、专业、可执行",
+        "cta": "给出一个可立刻落地的小步骤，推动用户行动",
+    }, ensure_ascii=False)
 
 
 def generate_video_plan(request: VideoRequest) -> VideoPlan:
-    """Given a normalised VideoRequest, produce a VideoPlan using LLM."""
+    """由规范化请求生成 VideoPlan（本地）。"""
     if os.environ.get("STUB_MODE") == "1":
         raw = _stub_plan_response()
     else:
-        template = _load_template("plan_prompt.md")
-        prompt = template.format(
-            topic=request.topic,
-            industry=request.industry or "通用",
-            platform=request.platform,
-            style=request.style,
-            duration_sec=request.duration_sec,
-            use_avatar=request.use_avatar,
-        )
-        with timed("generate_video_plan (LLM)", logger):
-            raw = _llm.chat(prompt, max_tokens=1024)
+        raw = _local_plan_response(request)
 
-    logger.debug("LLM plan raw output: %s", raw[:500])
-    enrichment = _extract_json(raw)
+    logger.debug("Local plan raw output: %s", raw[:500])
+    enrichment = json.loads(raw)
 
     plan = VideoPlan(
         topic=request.topic,

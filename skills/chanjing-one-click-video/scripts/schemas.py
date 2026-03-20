@@ -1,7 +1,4 @@
-"""
-Data schemas and validation for chanjing-one-click-video skill.
-All intermediate objects are defined here to keep the rest of the codebase clean.
-"""
+"""chanjing-one-click-video 请求与各阶段结果的数据结构。"""
 
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
@@ -26,6 +23,9 @@ class VideoRequest:
     voice_id: str = ""                 # empty = use platform default
     subtitle_required: bool = True
     cover_required: bool = True
+    strict_validation: bool = True
+    allow_auto_expand_topic: bool = False
+    max_retry_per_step: int = 1
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -101,6 +101,9 @@ class Scene:
     subtitle: str
     visual_prompt: str
     use_avatar: bool = True
+    # B-roll：文生图 / 图生视频 分轨提示（空则渲染层回退到 visual_prompt）
+    image_prompt: str = ""
+    i2v_prompt: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -131,6 +134,7 @@ class RenderResult:
     tts_urls: List[str] = field(default_factory=list)
     scene_video_urls: List[str] = field(default_factory=list)
     render_path: str = ""              # avatar_direct_render / tts_compose / stub
+    degrade_log: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
