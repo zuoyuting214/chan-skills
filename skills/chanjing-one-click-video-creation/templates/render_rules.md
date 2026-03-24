@@ -57,7 +57,7 @@
 - 每次拉**最新**列表；不用过期 person id。
 - 请求里须显式提供 `person_id`/`avatar_id` 与 **`figure_type`**（公共多形态时与 `list_figures` 列一致）；**禁止**用环境变量覆盖数字人/形象类型。
 - **`list_figures` 默认 `--source customised`**，空列表正常；**公共形象**须显式执行 `list_figures --source common`（脚本无环境变量改默认源）。
-- **选型须对比，勿默认列表排序**：`--json` 下对每条公共数字人比对 `name`、`figures[].type`、`figures[].width`/`height`、`audio_man_id`、`audio_name` 与当次策划/口播人设；必要时增大 `--page-size` 或翻页。**禁止**未比较即取返回列表最前几条。**默认偏好年轻形象**（名称或 `audio_name` 体现青年/元气/学生等气质者优先；题材需要成熟/中老年时再调整），与 **`chanjing-one-click-video` `SKILL.md` §3** 一致。
+- **选型须对比，勿默认列表排序**：`--json` 下对每条公共数字人比对 `name`、`figures[].type`、`figures[].width`/`height`、`audio_man_id`、`audio_name` 与当次策划/口播人设；必要时增大 `--page-size` 或翻页。**禁止**未比较即取返回列表最前几条。**默认偏好年轻形象**（名称或 `audio_name` 体现青年/元气/学生等气质者优先；题材需要成熟/中老年时再调整），与 **`chanjing-one-click-video-creation` `SKILL.md` §3** 一致。
 - TTS **`audio_man`** 宜与该形象返回的 **`audio_man_id`** 一致；**须在 `workflow.json` 中写明**，禁止依赖环境变量默认音色。
 - 失败可在**同套切段音频**下换列表中其它形象重试。
 

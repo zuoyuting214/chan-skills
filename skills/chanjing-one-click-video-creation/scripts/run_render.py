@@ -108,7 +108,7 @@ def build_ai_segment_prompt(base: str, seg_index: int, seg_total: int) -> str:
 
 
 def repo_root_from_script() -> Path:
-    # 仅当布局为 …/<repo>/skills/chanjing-one-click-video/scripts/run_render.py 时，
+    # 仅当布局为 …/<repo>/skills/chanjing-one-click-video-creation/scripts/run_render.py 时，
     # 向上四级为 <repo>（CHAN_SKILLS_DIR 期望的根）。单独拷贝本 skill 时须设环境变量。
     return Path(__file__).resolve().parent.parent.parent.parent
 
@@ -765,7 +765,7 @@ def run_dh_create_job(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="chanjing-one-click-video 确定性成片")
+    parser = argparse.ArgumentParser(description="chanjing-one-click-video-creation 确定性成片")
     parser.add_argument("--input", required=True, help="workflow JSON 路径")
     parser.add_argument("--output-dir", required=True, help="输出目录")
     args = parser.parse_args()

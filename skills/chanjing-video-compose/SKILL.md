@@ -142,7 +142,7 @@ python skills/chanjing-video-compose/scripts/download_result \
 
 * 不要默认假设用户要字幕或不要字幕
 * 创建任务前，必须先明确询问用户选择：`show` 或 `hide`
-* 若由 **`chanjing-one-click-video`** 的 **`run_render.py`** 调用 `create_task`，以当次 **`workflow.json` 根级 `subtitle_required`** 为准（**默认 false** → `--subtitle hide`；**true** → `show` 及推荐样式），**无需**为该一键成片路径再单独追问字幕开关，除非用户在需求里明确要求改字幕策略
+* 若由 **`chanjing-one-click-video-creation`** 的 **`run_render.py`** 调用 `create_task`，以当次 **`workflow.json` 根级 `subtitle_required`** 为准（**默认 false** → `--subtitle hide`；**true** → `show` 及推荐样式），**无需**为该一键成片路径再单独追问字幕开关，除非用户在需求里明确要求改字幕策略
 * 用户选择保留字幕时，调用 `create_task --subtitle show`
 * 若用户未指定字幕位置或样式，直接使用官方推荐默认值；`create_task` 在未传 `--subtitle-color` 时默认白字 `color=#FFFFFF`：1080p 为 `x=31 y=1521 width=1000 height=200 font_size=64 stroke_width=7 asr_type=0`；4K 画布为 `x=80 y=2840 width=2000 height=1000 font_size=150 stroke_width=7 asr_type=0`（两组均含 `color=#FFFFFF`）
 * 用户选择隐藏字幕时，调用 `create_task --subtitle hide` 或兼容旧用法 `--hide-subtitle`

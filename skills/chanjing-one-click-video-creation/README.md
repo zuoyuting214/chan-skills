@@ -1,4 +1,4 @@
-# chanjing-one-click-video
+# chanjing-one-click-video-creation
 
 ## 1. 作用说明
 
