@@ -3,20 +3,25 @@
 
 - 默认值：`tests/test_id_resolver.py` 内嵌常量（见 EMBEDDED_DEFAULTS）；可选覆盖文件
   `tests/chanjing_test_defaults.json`（从 chanjing_test_defaults.example.json 复制，勿提交真实 ID）。
-- 若 audio_man / person_id 仍不全，则子进程调用 `list_voices --json` 与
-  `list_figures --source common --json` 拉取；**不读写**仓库内缓存文件，不记录历史选型。
+- 若 audio_man / person_id 仍不全，则调用当前 skill 内的 clients：
+  `clients.tts_client.list_voices()` 与 `clients.avatar_client.list_figures(source="common")`
+  现场拉取；**不读写**仓库内缓存文件，不记录历史选型。
 
 不使用环境变量指定测试 ID。不在 `run_render.py` 生产路径中使用；不读 list_tasks。
 """
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
 import unittest
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from clients.tts_client import first_voice_id, list_voices
+from clients.avatar_client import first_common_person_figure, list_figures
 
 # 代码内嵌默认（与 chanjing_test_defaults.example.json 一致）；留空表示走接口自动拉取（仅测试，不写缓存）
 EMBEDDED_DEFAULTS: dict[str, str] = {
@@ -30,13 +35,6 @@ DEFAULT_TEST_AUDIO_MAN: str = EMBEDDED_DEFAULTS["audio_man"]
 DEFAULT_TEST_PERSON_ID: str = EMBEDDED_DEFAULTS["person_id"]
 DEFAULT_TEST_FIGURE_TYPE: str = EMBEDDED_DEFAULTS["figure_type"]
 
-
-def _skill_root() -> Path:
-    return Path(__file__).resolve().parent.parent
-
-
-def _repo_root() -> Path:
-    return _skill_root().parent.parent
 
 
 def _defaults_path() -> Path:
@@ -59,63 +57,18 @@ def _load_config_defaults() -> dict[str, str]:
         base["figure_type"] = DEFAULT_TEST_FIGURE_TYPE
     return base
 
+def _fetch_from_api() -> dict[str, Any]:
+    voice_data = list_voices(page=1, size=100)
+    common_figures = list_figures(source="common", page=1, page_size=20)
 
-def _run_script_json(script: Path, args: list[str], timeout: int = 90) -> Any:
-    cmd = [sys.executable, str(script), *args]
-    r = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=os.environ.copy(),
-    )
-    if r.returncode != 0:
-        raise RuntimeError(
-            r.stderr.strip() or r.stdout.strip() or f"{script.name} exit {r.returncode}"
-        )
-    return json.loads(r.stdout.strip())
+    person_id, figure_type = first_common_person_figure(common_figures)
+    audio_man = first_voice_id(voice_data)
 
-
-def _first_voice_id(data: dict[str, Any]) -> str:
-    for v in data.get("list") or []:
-        vid = str(v.get("id", "")).strip()
-        if vid:
-            return vid
-    raise RuntimeError("list_voices 返回列表为空或无 id")
-
-
-def _first_common_person_figure(payload: dict[str, Any]) -> tuple[str, str]:
-    data = payload.get("data") or {}
-    items = data.get("list") or []
-    for item in items:
-        pid = str(item.get("id", "")).strip()
-        figures = item.get("figures") or []
-        for fig in figures:
-            ft = str(fig.get("type", "")).strip()
-            if pid and ft:
-                return pid, ft
-        if pid and figures:
-            ft0 = str(figures[0].get("type", "") or DEFAULT_TEST_FIGURE_TYPE).strip()
-            return pid, ft0 or DEFAULT_TEST_FIGURE_TYPE
-    raise RuntimeError("list_figures --source common 返回列表为空")
-
-
-def _fetch_from_api(repo: Path) -> dict[str, Any]:
-    lv = repo / "skills" / "chanjing-tts" / "scripts" / "list_voices"
-    lf = repo / "skills" / "chanjing-video-compose" / "scripts" / "list_figures"
-    if not lv.is_file() or not lf.is_file():
-        raise FileNotFoundError(f"缺少脚本: {lv} 或 {lf}")
-
-    voice_data = _run_script_json(lv, ["--json"])
-    person_id, figure_type = _first_common_person_figure(
-        _run_script_json(lf, ["--source", "common", "--json"])
-    )
-    audio_man = _first_voice_id(voice_data)
     return {
         "audio_man": audio_man,
         "person_id": person_id,
         "figure_type": figure_type,
-        "source": "api_subprocess",
+        "source": "api_clients",
     }
 
 
@@ -139,8 +92,7 @@ def resolve_render_test_ids(*, force_refresh: bool = False) -> dict[str, Any]:
             "source": "config_file",
         }
 
-    repo = _repo_root()
-    return _fetch_from_api(repo)
+    return _fetch_from_api()
 
 
 class TestIdResolver(unittest.TestCase):
@@ -184,7 +136,7 @@ class TestIdResolver(unittest.TestCase):
         self.assertIn("person_id", d)
         self.assertTrue(d["audio_man"])
         self.assertTrue(d["person_id"])
-        self.assertEqual(d.get("source"), "api_subprocess")
+        self.assertEqual(d.get("source"), "api_clients")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-一键成片确定性渲染：TTS（含 audio_task_state）→ 切段 → 数字人 / AI 并行 poll →
+一键成片确定性渲染：TTS → 切段 → 数字人 / AI 并行 poll →
 以首条数字人轨 ffprobe 为参照封装 → ffmpeg 拼接。
 
-通过子进程调用 chan-skills 内 chanjing-tts / chanjing-video-compose / chanjing-ai-creation
-脚本；不调用 list_tasks。渲染规则以同技能包 templates/render_rules.md 为准；ref_prompt 见 templates/storyboard_prompt.md 与 history_storyboard_prompt.md（SKILL.md §4.2）；分镜字段见 storyboard_prompt.md；字段契约见 SKILL.md §5。
+当前实现：
+- TTS 通过本 skill 内 clients.tts_client 调用
+- 数字人视频通过本 skill 内 clients.avatar_client 调用
+- AI 文生视频通过本 skill 内 clients.ai_creation_client 调用
+不调用 list_tasks。渲染规则以同技能包 templates/render_rules.md 为准；
+ref_prompt 见 templates/storyboard_prompt.md 与 history_storyboard_prompt.md（SKILL.md §4.2）；
+分镜字段见 storyboard_prompt.md；字段契约见 SKILL.md §5。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,13 +23,27 @@ import sys
 import threading
 import time
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from clients.tts_client import create_tts_task, poll_tts_task_full
+
+from clients.avatar_client import (
+    upload_file,
+    create_audio_driven_video_task,
+    poll_video_task_url,
+)
+
+from clients.ai_creation_client import (
+    submit_video_generation_task,
+    poll_ai_creation_task_url,
+)
+
 # 分镜连续合并为 TTS 批时的字符上限（低于接口 ~4000 字）；见 render_rules.md §3·C.4；编排见 SKILL.md §5、§9
 TTS_BATCH_MAX = 3900
-API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+AI_VIDEO_PROMPT_MAX_CHARS = 8000
+DEFAULT_AI_VIDEO_MODEL = "Doubao-Seedance-1.0-pro"
 DOWNLOAD_SEM = threading.BoundedSemaphore(2)
 
 
@@ -93,7 +113,7 @@ def build_ai_segment_prompt(base: str, seg_index: int, seg_total: int) -> str:
     追加层与 **`storyboard_prompt.md`·D.1b** 抵触时以 D.1b 与 base 为准。
     """
     base = (base or "").strip()
-    max_total = int(os.environ.get("AI_VIDEO_PROMPT_MAX_CHARS", "8000"))
+    max_total = AI_VIDEO_PROMPT_MAX_CHARS
     extra = _ai_segment_direction(seg_index, seg_total)
     if not extra:
         return base[:max_total]
@@ -105,23 +125,6 @@ def build_ai_segment_prompt(base: str, seg_index: int, seg_total: int) -> str:
         trimmed = base[:room].rstrip()
     out = trimmed + sep + extra
     return out[:max_total]
-
-
-def repo_root_from_script() -> Path:
-    # 仅当布局为 …/<repo>/skills/chanjing-one-click-video-creation/scripts/run_render.py 时，
-    # 向上四级为 <repo>（CHAN_SKILLS_DIR 期望的根）。单独拷贝本 skill 时须设环境变量。
-    return Path(__file__).resolve().parent.parent.parent.parent
-
-
-def resolve_chan_skills_dir() -> Path:
-    env = os.environ.get("CHAN_SKILLS_DIR", "").strip()
-    if env:
-        return Path(env).resolve()
-    return repo_root_from_script()
-
-
-def script_path(root: Path, skill: str, name: str) -> Path:
-    return root / "skills" / skill / "scripts" / name
 
 
 def require_bin(name: str) -> None:
@@ -157,49 +160,6 @@ def with_retry(fn: Callable[[], Any], retries: int) -> Any:
             time.sleep(1.0)
     assert last is not None
     raise last
-
-
-def import_tts_get_token(root: Path):
-    p = str(script_path(root, "chanjing-tts", "_auth.py").parent)
-    if p not in sys.path:
-        sys.path.insert(0, p)
-    from _auth import get_token  # type: ignore
-
-    return get_token
-
-
-def fetch_audio_task_state(token: str, task_id: str) -> dict[str, Any]:
-    url = f"{API_BASE}/open/v1/audio_task_state"
-    body = json.dumps({"task_id": task_id}).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"access_token": token, "Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def poll_tts_state(
-    get_token, task_id: str, interval: int = 3
-) -> dict[str, Any]:
-    while True:
-        token, err = get_token()
-        if err:
-            raise RuntimeError(err)
-        res = fetch_audio_task_state(token, task_id)
-        if res.get("code") != 0:
-            raise RuntimeError(res.get("msg", str(res)))
-        data = res.get("data") or {}
-        status = data.get("status")
-        if status == 9:
-            return data
-        if status not in (1, None):
-            raise RuntimeError(
-                data.get("errMsg") or data.get("errReason") or f"TTS status={status}"
-            )
-        time.sleep(interval)
 
 
 def download_url(url: str, dest: Path) -> None:
@@ -617,8 +577,20 @@ def mux_video_audio(video: Path, audio: Path, out: Path, ref: dict[str, Any]) ->
     run_subprocess(cmd, timeout=600)
 
 
+def normalize_subtitles(subs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for s in subs:
+        result.append(
+            {
+                "subtitle": s.get("subtitle", "") or "",
+                "start_time": float(s.get("start_time", 0) or 0),
+                "end_time": float(s.get("end_time", 0) or 0),
+            }
+        )
+    return result
+
+
 def run_tts_pipeline(
-    root: Path,
     batches: list[list[dict]],
     audio_man: str,
     speed: float,
@@ -626,8 +598,7 @@ def run_tts_pipeline(
     retries: int,
     work: Path,
 ) -> tuple[Path, list[dict], list[str]]:
-    tts_create = script_path(root, "chanjing-tts", "create_task")
-    get_token = import_tts_get_token(root)
+
     mp3_parts: list[Path] = []
     merged_subs: list[dict] = []
     offset = 0.0
@@ -636,49 +607,78 @@ def run_tts_pipeline(
 
     for bi, batch_scenes in enumerate(batches):
         text = "".join(s.get("voiceover", "") for s in batch_scenes)
+
         if len(text) > 4000:
             raise ValueError(f"TTS 批次 {bi} 超过 4000 字，请调整分镜合并")
 
-        def _create() -> str:
-            return run_subprocess(
-                [
-                    sys.executable,
-                    str(tts_create),
-                    "--audio-man",
-                    audio_man,
-                    "--text",
-                    text,
-                    "--speed",
-                    str(speed),
-                    "--pitch",
-                    str(pitch),
-                ]
+        # -------------------------
+        # 1️⃣ 创建任务
+        # -------------------------
+        def _create():
+            return create_tts_task(
+                text=text,
+                audio_man=audio_man,
+                speed=speed,
+                pitch=pitch
             )
 
         task_id = with_retry(_create, retries)
         task_ids.append(task_id)
-        data = with_retry(lambda: poll_tts_state(get_token, task_id), retries)
+
+        # -------------------------
+        # 2️⃣ 轮询任务（完整数据）
+        # -------------------------
+        def _poll():
+            return poll_tts_task_full(task_id)
+
+        data = with_retry(_poll, retries)
+
         batch_states.append(dict(data))
+
+        # -------------------------
+        # 3️⃣ 下载音频
+        # -------------------------
         full = data.get("full") or {}
         url = full.get("url")
+
         if not url:
             raise RuntimeError("TTS 完成但无 full.url")
+
         raw = work / f"tts_batch_{bi}.mp3"
         download_url(url, raw)
-        dur = ffprobe_duration(raw)
-        subs = data.get("subtitles") or []
+
+        # -------------------------
+        # 4️⃣ 处理字幕
+        # -------------------------
+        raw_subs = data.get("subtitles") or []
+        subs = normalize_subtitles(raw_subs)
+
+        dur = full.get("duration") or ffprobe_duration(raw)
+
         scale = _infer_subtitle_scale(subs, dur)
-        merged_subs.extend(merge_subtitles_with_offset(subs, offset, scale))
+
+        merged_subs.extend(
+            merge_subtitles_with_offset(subs, offset, scale)
+        )
+
         offset += dur
         mp3_parts.append(raw)
 
+    # -------------------------
+    # 5️⃣ 合并音频
+    # -------------------------
     merged_mp3 = work / "tts_merged.mp3"
+
     if len(mp3_parts) == 1:
         merged_mp3.write_bytes(mp3_parts[0].read_bytes())
     else:
         ffmpeg_concat_audio_files(mp3_parts, merged_mp3)
 
+    # -------------------------
+    # 6️⃣ 保存状态
+    # -------------------------
     state_path = work / "tts_state.json"
+
     state_path.write_text(
         json.dumps(
             {
@@ -691,28 +691,19 @@ def run_tts_pipeline(
         ),
         encoding="utf-8",
     )
+
     return merged_mp3, merged_subs, task_ids
 
 
-def poll_compose(root: Path, video_id: str) -> str:
-    poll = script_path(root, "chanjing-video-compose", "poll_task")
-    return run_subprocess(
-        [sys.executable, str(poll), "--id", video_id, "--interval", "10"],
-        timeout=3600,
-    )
+def poll_compose(video_id: str) -> str:
+    return poll_video_task_url(video_id, interval=10, timeout=3600)
 
 
-def poll_ai(root: Path, uid: str) -> str:
-    poll = script_path(root, "chanjing-ai-creation", "poll_task")
-    return run_subprocess(
-        [sys.executable, str(poll), "--unique-id", uid, "--interval", "10"],
-        timeout=3600,
-    )
+def poll_ai(uid: str) -> str:
+    return poll_ai_creation_task_url(uid, interval=10, timeout=3600)
 
 
 def run_dh_create_job(
-    upload: Path,
-    compose_create: Path,
     person_id: str,
     figure_type: Optional[str],
     wav_path: Path,
@@ -722,44 +713,23 @@ def run_dh_create_job(
     subtitle_stroke_color: Optional[str] = None,
     subtitle_stroke_width: Optional[int] = None,
 ) -> str:
-    """上传切段音频并创建数字人视频任务，返回 video 任务 id（stdout）。"""
+    """上传切段音频并创建数字人视频任务，返回 video 任务 id。"""
 
     def _up() -> str:
-        return run_subprocess(
-            [
-                sys.executable,
-                str(upload),
-                "--service",
-                "make_video_audio",
-                "--file",
-                str(wav_path),
-            ]
-        )
+        return upload_file(str(wav_path), "make_video_audio")
 
     fid = with_retry(_up, retries)
-    sub = "show" if subtitle == "show" else "hide"
-    cargs = [
-        sys.executable,
-        str(compose_create),
-        "--person-id",
-        person_id,
-        "--audio-file-id",
-        fid,
-        "--subtitle",
-        sub,
-    ]
-    if figure_type:
-        cargs.extend(["--figure-type", figure_type])
-    if sub == "show":
-        if subtitle_color:
-            cargs.extend(["--subtitle-color", subtitle_color])
-        if subtitle_stroke_color:
-            cargs.extend(["--subtitle-stroke-color", subtitle_stroke_color])
-        if subtitle_stroke_width is not None:
-            cargs.extend(["--subtitle-stroke-width", str(subtitle_stroke_width)])
 
     def _ct() -> str:
-        return run_subprocess(cargs)
+        return create_audio_driven_video_task(
+            person_id=person_id,
+            audio_file_id=fid,
+            figure_type=figure_type,
+            subtitle="show" if subtitle == "show" else "hide",
+            subtitle_color=subtitle_color,
+            subtitle_stroke_color=subtitle_stroke_color,
+            subtitle_stroke_width=subtitle_stroke_width,
+        )
 
     return with_retry(_ct, retries)
 
@@ -772,8 +742,6 @@ def main() -> None:
 
     require_bin("ffmpeg")
     require_bin("ffprobe")
-
-    root = resolve_chan_skills_dir()
     inp = Path(args.input).resolve()
     out_dir = Path(args.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -808,11 +776,7 @@ def main() -> None:
     ai_seg = int(data.get("ai_video_duration_sec", 10))
     if ai_seg not in (5, 10):
         ai_seg = 10
-    model_code = (
-        data.get("model_code")
-        or os.environ.get("AI_VIDEO_MODEL")
-        or "Doubao-Seedance-1.0-pro"
-    )
+    model_code = data.get("model_code") or DEFAULT_AI_VIDEO_MODEL
 
     dh_subtitle = "show" if data.get("subtitle_required") else "hide"
     sub_color = (data.get("subtitle_color") or "").strip() or None
@@ -843,7 +807,7 @@ def main() -> None:
     try:
         batches = group_scene_batches(scenes_sorted)
         merged_mp3, merged_subs, tts_ids = run_tts_pipeline(
-            root, batches, audio_man, speed, pitch, retries, work
+            batches, audio_man, speed, pitch, retries, work
         )
         result["debug"]["tts_task_ids"] = tts_ids
         result["debug"]["intermediate_paths"]["tts_merged_mp3"] = str(merged_mp3)
@@ -883,9 +847,6 @@ def main() -> None:
             ffmpeg_cut_audio(merged_mp3, t0, t1, wav)
             scene_wavs[sid] = wav
 
-        upload = script_path(root, "chanjing-video-compose", "upload_file")
-        compose_create = script_path(root, "chanjing-video-compose", "create_task")
-        ai_submit = script_path(root, "chanjing-ai-creation", "submit_task")
 
         first_dh_sid: Optional[int] = next(
             (int(s["scene_id"]) for s in scenes_sorted if s.get("use_avatar")),
@@ -901,8 +862,6 @@ def main() -> None:
         if has_ai and first_dh_sid is not None:
             wav0 = scene_wavs[first_dh_sid]
             vid0 = run_dh_create_job(
-                upload,
-                compose_create,
                 person_id,
                 figure_type,
                 wav0,
@@ -913,7 +872,7 @@ def main() -> None:
                 subtitle_stroke_width=sub_stroke_width,
             )
             result["debug"]["dh_video_ids"][str(first_dh_sid)] = vid0
-            u0 = with_retry(lambda: poll_compose(root, vid0), retries)
+            u0 = with_retry(lambda: poll_compose(vid0), retries)
             url_dh[first_dh_sid] = u0
             result["render_result"]["scene_video_urls"][f"dh_{first_dh_sid}"] = u0
             p0 = work / f"scene{first_dh_sid:02d}_dh_raw.mp4"
@@ -945,8 +904,6 @@ def main() -> None:
                 if has_ai and sid == first_dh_sid:
                     continue
                 vid = run_dh_create_job(
-                    upload,
-                    compose_create,
                     person_id,
                     figure_type,
                     scene_wavs[sid],
@@ -967,23 +924,12 @@ def main() -> None:
                     ptext = build_ai_segment_prompt(prompt, k, n)
 
                     def _sub(ptext=ptext) -> str:
-                        return run_subprocess(
-                            [
-                                sys.executable,
-                                str(ai_submit),
-                                "--creation-type",
-                                "4",
-                                "--model-code",
-                                str(model_code),
-                                "--prompt",
-                                ptext,
-                                "--aspect-ratio",
-                                ai_aspect_ratio,
-                                "--clarity",
-                                str(ai_clarity),
-                                "--video-duration",
-                                str(ai_seg),
-                            ]
+                        return submit_video_generation_task(
+                            model_code=str(model_code),
+                            prompt=ptext,
+                            aspect_ratio=ai_aspect_ratio,
+                            clarity=int(ai_clarity),
+                            video_duration=int(ai_seg),
                         )
 
                     uid = with_retry(_sub, retries)
@@ -998,10 +944,10 @@ def main() -> None:
             with ThreadPoolExecutor(max_workers=4) as ex:
                 for sid, vid in dh_jobs.items():
                     futs.append(
-                        (("dh", sid), ex.submit(poll_compose, root, vid))
+                        (("dh", sid), ex.submit(poll_compose, vid))
                     )
                 for key, uid in ai_jobs.items():
-                    futs.append((("ai", key), ex.submit(poll_ai, root, uid)))
+                    futs.append((("ai", key), ex.submit(poll_ai, uid)))
                 for tag, fut in futs:
                     u = fut.result()
                     if tag[0] == "dh":

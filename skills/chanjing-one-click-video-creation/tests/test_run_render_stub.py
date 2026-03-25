@@ -1,4 +1,4 @@
-"""不调用蝉镜 API：校验 run_render 纯函数；ID 解析见 test_id_resolver。"""
+"""以纯逻辑测试为主；example workflow 测试在缺少本地测试 ID 时可能通过 test_id_resolver 访问蝉镜 API。"""
 from __future__ import annotations
 
 import json
