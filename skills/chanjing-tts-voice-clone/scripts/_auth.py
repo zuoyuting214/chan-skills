@@ -1,9 +1,7 @@
-# 鉴权：与 chanjing-credentials-guard 使用同一配置文件（CONFIG_DIR/credentials.json）
-# 无 AK/SK 时执行 open_login_page 脚本打开注册/登录页
+# 鉴权：从 CONFIG_DIR/credentials.json 读取 AK/SK
+# 实现：AK/SK 校验、Token 校验与刷新；无 AK/SK 或 AK/SK 无效时在默认浏览器打开蝉镜官方登录页
 import json
 import os
-import subprocess
-import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -15,27 +13,26 @@ BUFFER_SECONDS = 300
 LOGIN_URL = "https://www.chanjing.cc/openapi/login"
 
 NO_CREDENTIALS_MSG = """已在浏览器打开蝉镜登录/注册页。
-获取秘钥后请执行：
-  python skills/chanjing-credentials-guard/scripts/chanjing-config --ak <你的app_id> --sk <你的secret_key>
-设置完毕后请重新执行您之前的操作。"""
+请先在 ~/.chanjing/credentials.json（或 $CHANJING_CONFIG_DIR/credentials.json）中配置：
+  {
+    "app_id": "<你的app_id>",
+    "secret_key": "<你的secret_key>"
+  }
+配置完成后请重新执行您之前的操作。"""
+
+INVALID_CREDENTIALS_MSG = """AK/SK 无效或已过期，已在浏览器打开蝉镜登录/注册页。
+请重新获取 app_id 和 secret_key，并更新 ~/.chanjing/credentials.json
+（或 $CHANJING_CONFIG_DIR/credentials.json）后重试。"""
 
 
 def _run_open_login_page():
-    """执行 credentials-guard 的 open_login_page 脚本，在默认浏览器打开注册/登录页。"""
+    """在默认浏览器打开蝉镜官方登录页。"""
     try:
-        skills_dir = Path(__file__).resolve().parent.parent.parent
-        script = skills_dir / "chanjing-credentials-guard" / "scripts" / "open_login_page"
-        if script.exists():
-            subprocess.run([sys.executable, str(script)], check=False, timeout=5)
-        else:
-            import webbrowser
-            webbrowser.open(LOGIN_URL)
+        import webbrowser
+
+        webbrowser.open(LOGIN_URL)
     except Exception:
-        try:
-            import webbrowser
-            webbrowser.open(LOGIN_URL)
-        except Exception:
-            pass
+        pass
 
 
 def read_config():
@@ -51,7 +48,27 @@ def write_config(data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def get_token():
+def clear_cached_token():
+    """清除本地缓存的 access_token / expire_in。"""
+    data = read_config()
+    data.pop("access_token", None)
+    data.pop("expire_in", None)
+    write_config(data)
+
+
+def _request_new_token(app_id, secret_key):
+    url = API_BASE + "/open/v1/access_token"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"app_id": app_id, "secret_key": secret_key}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def get_token(force_refresh=False):
     """返回 (token, None) 或 (None, error_msg)。"""
     data = read_config()
     app_id = (data.get("app_id") or "").strip()
@@ -61,36 +78,30 @@ def get_token():
         return None, NO_CREDENTIALS_MSG
 
     now = int(time.time())
-    token = data.get("access_token")
+    token = (data.get("access_token") or "").strip()
     expire_in = data.get("expire_in")
     try:
         expire_in = int(expire_in) if expire_in is not None else 0
     except (ValueError, TypeError):
         expire_in = 0
 
-    if token and expire_in > now + BUFFER_SECONDS:
+    if (not force_refresh) and token and expire_in > now + BUFFER_SECONDS:
         return token, None
 
-    url = API_BASE + "/open/v1/access_token"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"app_id": app_id, "secret_key": secret_key}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        body = _request_new_token(app_id, secret_key)
     except Exception as e:
         return None, str(e)
 
     if body.get("code") != 0:
-        return None, body.get("msg", "获取 Token 失败")
+        _run_open_login_page()
+        return None, INVALID_CREDENTIALS_MSG
 
     d = body.get("data", {})
     new_token = d.get("access_token")
     if not new_token:
-        return None, "API 返回无 access_token"
+        _run_open_login_page()
+        return None, INVALID_CREDENTIALS_MSG
 
     data["access_token"] = new_token
     data["expire_in"] = d.get("expire_in")

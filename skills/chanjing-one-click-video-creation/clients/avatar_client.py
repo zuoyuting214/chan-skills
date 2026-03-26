@@ -9,9 +9,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
-from clients.auth import get_token
+from clients.auth import clear_cached_token, get_token, is_token_invalid
 
-API_BASE =  "https://open-api.chanjing.cc"
+API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
 
 FILE_READY_STATUSES = {1}
 FILE_FAILED_STATUSES = {98, 99, 100}
@@ -43,16 +43,27 @@ def _json_request(
         body = json.dumps(data).encode("utf-8")
         req_headers.setdefault("Content-Type", "application/json")
 
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers=req_headers,
-        method=method,
-    )
+    def _once(headers_to_use: dict[str, str]) -> dict[str, Any]:
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers=headers_to_use,
+            method=method,
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw)
 
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8")
-        return json.loads(raw)
+    res = _once(req_headers)
+    if is_token_invalid(res) and req_headers.get("access_token"):
+        clear_cached_token()
+        refreshed, err = get_token(force_refresh=True)
+        if err or not refreshed:
+            raise RuntimeError(err or "刷新 access_token 失败")
+        retry_headers = dict(req_headers)
+        retry_headers["access_token"] = str(refreshed)
+        return _once(retry_headers)
+    return res
 
 
 # =========================================================
@@ -844,31 +855,34 @@ def list_figures(
 ) -> dict[str, Any]:
     token = _get_access_token()
 
-    if source == "customised":
-        req = urllib.request.Request(
-            f"{API_BASE}/open/v1/list_customised_person",
-            data=json.dumps({"page": page, "page_size": page_size}).encode("utf-8"),
-            headers={
-                "access_token": token,
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-    elif source == "common":
-        params = urllib.parse.urlencode({"page": page, "size": page_size})
-        req = urllib.request.Request(
-            f"{API_BASE}/open/v1/list_common_dp?{params}",
-            headers={
-                "access_token": token,
-                "Content-Type": "application/json",
-            },
-            method="GET",
-        )
-    else:
-        raise ValueError("source 只能是 'customised' 或 'common'")
+    def _once(current_token: str) -> dict[str, Any]:
+        if source == "customised":
+            req = urllib.request.Request(
+                f"{API_BASE}/open/v1/list_customised_person",
+                data=json.dumps({"page": page, "page_size": page_size}).encode("utf-8"),
+                headers={"access_token": current_token, "Content-Type": "application/json"},
+                method="POST",
+            )
+        elif source == "common":
+            params = urllib.parse.urlencode({"page": page, "size": page_size})
+            req = urllib.request.Request(
+                f"{API_BASE}/open/v1/list_common_dp?{params}",
+                headers={"access_token": current_token, "Content-Type": "application/json"},
+                method="GET",
+            )
+        else:
+            raise ValueError("source 只能是 'customised' 或 'common'")
 
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    body = _once(token)
+    if is_token_invalid(body):
+        clear_cached_token()
+        refreshed, err = get_token(force_refresh=True)
+        if err or not refreshed:
+            raise RuntimeError(err or "刷新 access_token 失败")
+        body = _once(str(refreshed))
 
     if body.get("code") != 0:
         raise RuntimeError(body.get("msg", body))

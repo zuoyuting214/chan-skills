@@ -12,9 +12,15 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _auth import get_token
+from _auth import clear_cached_token, get_token
 
 API_BASE = __import__("os").environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+
+
+def is_token_invalid(body):
+    code = body.get("code")
+    msg = str(body.get("msg", ""))
+    return code == 10400 or "AccessToken已失效" in msg or "AccessToken verification failed" in msg
 
 
 def fetch_customised(token, page, page_size):
@@ -98,8 +104,22 @@ def main():
 
     if args.source == "customised":
         res = fetch_customised(token, args.page, args.page_size)
+        if is_token_invalid(res):
+            clear_cached_token()
+            token, err = get_token(force_refresh=True)
+            if err:
+                print(err, file=sys.stderr)
+                sys.exit(1)
+            res = fetch_customised(token, args.page, args.page_size)
     else:
         res = fetch_common(token, args.page, args.page_size)
+        if is_token_invalid(res):
+            clear_cached_token()
+            token, err = get_token(force_refresh=True)
+            if err:
+                print(err, file=sys.stderr)
+                sys.exit(1)
+            res = fetch_common(token, args.page, args.page_size)
 
     if res.get("code") != 0:
         print(res.get("msg", res), file=sys.stderr)

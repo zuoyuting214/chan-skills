@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 获取上传链接、PUT 本地文件，并轮询文件详情接口直到上传成功，最后输出 file_id。
-与 chanjing-credentials-guard 使用同一配置文件获取 Token。
+读取本地配置文件获取 Token。
 用法: upload_file --service lip_sync_video --file /path/to/video.mp4 [--poll-interval 5]
 输出: file_id（一行）或错误到 stderr
 """
@@ -14,7 +14,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _auth import get_token
+from _auth import get_token, clear_cached_token
 
 API_BASE = __import__("os").environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
 # 官方文件管理文档里 1 表示文件可用；保留 2 以兼容历史状态定义。
@@ -23,32 +23,62 @@ POLL_INTERVAL_DEFAULT = 5
 POLL_TIMEOUT_DEFAULT = 300
 
 
-def get_file_detail(token, file_id):
-    """GET /open/v1/common/file_detail?id=file_id, return (data_dict, None) or (None, error_msg)."""
+def is_token_invalid(body):
+    code = body.get("code")
+    msg = str(body.get("msg", ""))
+    return code == 10400 or "AccessToken已失效" in msg or "AccessToken verification failed" in msg
+
+
+def fetch_upload_url(token, service, name):
+    qs = urllib.parse.urlencode({"service": service, "name": name})
+    url = f"{API_BASE}/open/v1/common/create_upload_url?{qs}"
+    req = urllib.request.Request(url, headers={"access_token": token}, method="GET")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def get_file_detail_body(token, file_id):
     url = f"{API_BASE}/open/v1/common/file_detail?id={urllib.parse.quote(file_id)}"
     req = urllib.request.Request(url, headers={"access_token": token}, method="GET")
     with urllib.request.urlopen(req, timeout=30) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def get_file_detail_with_retry(token, file_id):
+    body = get_file_detail_body(token, file_id)
+
+    if is_token_invalid(body):
+        clear_cached_token()
+        token, err = get_token(force_refresh=True)
+        if err:
+            return None, None, err
+        body = get_file_detail_body(token, file_id)
+
     if body.get("code") != 0:
-        return None, body.get("msg", "file_detail failed")
-    return body.get("data"), None
+        return None, token, body.get("msg", "file_detail failed")
+
+    return body.get("data"), token, None
 
 
 def poll_file_ready(token, file_id, interval=5, timeout=300):
     """Poll file_detail until the uploaded file is ready to use."""
     deadline = time.monotonic() + timeout
+
     while time.monotonic() < deadline:
-        data, err = get_file_detail(token, file_id)
+        data, token, err = get_file_detail_with_retry(token, file_id)
         if err:
             return False, err
         if data is None:
             return False, "no data"
+
         status = data.get("status")
         if status in FILE_READY_STATUSES:
             return True, None
         if status not in (0, None):
             return False, data.get("msg") or f"file status={status}"
+
         time.sleep(interval)
+
     return False, "poll timeout"
 
 
@@ -70,11 +100,15 @@ def main():
         print(err, file=sys.stderr)
         sys.exit(1)
 
-    qs = urllib.parse.urlencode({"service": args.service, "name": path.name})
-    url = f"{API_BASE}/open/v1/common/create_upload_url?{qs}"
-    req = urllib.request.Request(url, headers={"access_token": token}, method="GET")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+    body = fetch_upload_url(token, args.service, path.name)
+
+    if is_token_invalid(body):
+        clear_cached_token()
+        token, err = get_token(force_refresh=True)
+        if err:
+            print(err, file=sys.stderr)
+            sys.exit(1)
+        body = fetch_upload_url(token, args.service, path.name)
 
     if body.get("code") != 0:
         print(body.get("msg", body), file=sys.stderr)
@@ -92,12 +126,14 @@ def main():
     # PUT 上传
     with open(path, "rb") as f:
         content = f.read()
+
     put_req = urllib.request.Request(
         sign_url,
         data=content,
         headers={"Content-Type": mime_type},
         method="PUT",
     )
+
     try:
         with urllib.request.urlopen(put_req, timeout=120) as put_resp:
             if put_resp.status not in (200, 204):
@@ -107,8 +143,13 @@ def main():
         print(f"上传失败: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Poll file_detail until file is ready (status success)
-    ready, err = poll_file_ready(token, file_id, interval=args.poll_interval, timeout=args.poll_timeout)
+    # Poll file_detail until file is ready
+    ready, err = poll_file_ready(
+        token,
+        file_id,
+        interval=args.poll_interval,
+        timeout=args.poll_timeout,
+    )
     if not ready:
         print(f"文件未就绪: {err}", file=sys.stderr)
         sys.exit(1)

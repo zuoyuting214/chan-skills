@@ -17,7 +17,10 @@ This TTS service supports:
 
 ## How to Use This Skill
 
-**前置条件（权限验证）**：执行本 Skill 前，必须先通过 **chanjing-credentials-guard** 完成 AK/SK 与 Token 校验。脚本与 guard 使用同一套凭证；无凭证时会执行 `open_login_page` 打开注册/登录页。
+**前置条件（本地配置与鉴权）**：本 Skill 自己包含本地配置和鉴权流程，不依赖其他 skill 的运行时脚本。  
+默认读取 `~/.chanjing/credentials.json`；若设置 `CHANJING_CONFIG_DIR`，则读取 `$CHANJING_CONFIG_DIR/credentials.json`。  
+API 默认使用 `https://open-api.chanjing.cc`，可用 `CHANJING_API_BASE` 覆盖。  
+当本地缺少 AK/SK 或 AK/SK 无效时，脚本可能在默认浏览器打开蝉镜官网登录页：`https://www.chanjing.cc/openapi/login`。
 
 Chanjing-TTS-Voice-Clone provides an asynchronous speech synthesis API.
 Hostname for all APIs is: "https://open-api.chanjing.cc".
@@ -398,10 +401,12 @@ Response field description:
 
 ## Scripts
 
-本 Skill 提供脚本（`skills/chanjing-tts-voice-clone/scripts/`），与 **chanjing-credentials-guard** 使用同一配置文件；无 AK/SK 时会**执行 `open_login_page` 脚本**打开注册/登录页。
+本 Skill 提供脚本（`scripts/`）：
 
 | 脚本 | 说明 |
 |------|------|
+| `chanjing-config` | 写入/查看本地 `app_id` 与 `secret_key`，并清理旧 token 缓存 |
+| `chanjing-get-token` | 从本地凭证获取有效 `access_token`（必要时自动刷新） |
 | `create_voice` | 提交定制声音任务（参考音频 URL），输出 voice_id |
 | `poll_voice` | 轮询定制声音直到就绪（status=2），输出 voice_id |
 | `create_task` | 使用定制声音创建 TTS 任务，输出 task_id |
@@ -411,14 +416,14 @@ Response field description:
 
 ```bash
 # 1. 创建定制声音（参考音频需为公开 URL）
-VOICE_ID=$(python skills/chanjing-tts-voice-clone/scripts/create_voice --name "我的声音" --url "https://example.com/ref.mp3")
+VOICE_ID=$(python scripts/create_voice --name "我的声音" --url "https://example.com/ref.mp3")
 
 # 2. 轮询直到声音就绪
-python skills/chanjing-tts-voice-clone/scripts/poll_voice --voice-id "$VOICE_ID"
+python scripts/poll_voice --voice-id "$VOICE_ID"
 
 # 3. 创建 TTS 任务
-TASK_ID=$(python skills/chanjing-tts-voice-clone/scripts/create_task --audio-man "$VOICE_ID" --text "Hello, I am your AI assistant.")
+TASK_ID=$(python scripts/create_task --audio-man "$VOICE_ID" --text "Hello, I am your AI assistant.")
 
 # 4. 轮询到完成，得到音频下载链接
-python skills/chanjing-tts-voice-clone/scripts/poll_task --task-id "$TASK_ID"
+python scripts/poll_task --task-id "$TASK_ID"
 ```

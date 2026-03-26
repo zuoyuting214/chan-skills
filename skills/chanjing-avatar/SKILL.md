@@ -1,113 +1,220 @@
 ---
 name: chanjing-avatar
-description: Use Chanjing Avatar API for lip-syncing video generation
+description: use chanjing avatar api to create lip-sync videos by uploading source media, creating avatar tasks, and polling task status. this skill reads app_id and secret_key from ~/.chanjing/credentials.json or $CHANJING_CONFIG_DIR/credentials.json, refreshes access_token for api calls, and may open the official chanjing login page if credentials are missing or invalid.
+metadata:
+  openclaw:
+    requires:
+      env:
+        - CHANJING_CONFIG_DIR
+        - CHANJING_API_BASE
+    homepage: https://open-api.chanjing.cc
 ---
 
-# Chanjing Avatar (Lip-Syncing)
+# Chanjing Avatar
 
 ## When to Use This Skill
 
-Use this skill when the user needs to create lip-syncing videos (digital avatar videos) with synchronized mouth movements.
+Use this skill when the user wants to create lip-sync avatar videos with Chanjing Avatar.
 
-Chanjing Avatar supports:
+Typical uses:
 
-* Text-driven or audio-driven lip-syncing
-* Multiple system voices for TTS
-* Video resolution customization
-* Task status polling and callback
+- create text-driven lip-sync videos from a source avatar video
+- create audio-driven lip-sync videos from a source avatar video plus uploaded audio
+- upload video or audio assets and obtain `file_id`
+- create a lip-sync generation task
+- poll task status until completion and return the remote video URL
 
 ## How to Use This Skill
 
-**前置条件**：执行本 Skill 前，必须先通过 **chanjing-credentials-guard** 完成 AK/SK 与 Token 校验。
+This skill includes its own local configuration and authentication flow.
 
-Multiple APIs need to be invoked. All share the domain: "https://open-api.chanjing.cc".
-All requests communicate using json.
-You should use utf-8 to encode and decode text throughout this task.
+### Local Configuration
 
-1. Obtain an `access_token`, which is required for all subsequent API calls
-2. Upload your video/audio files using the File Management API to get `file_id`
-3. Create a lip-syncing task with video and audio/text using these `file_id` values
-4. Poll the Query Task Detail API or use Task List API to check status
-5. Download the generated video using the url in response when status is completed
+This skill reads credentials from:
 
-### Obtain AccessToken
+- `~/.chanjing/credentials.json`
+- or `$CHANJING_CONFIG_DIR/credentials.json`
 
-从 `~/.chanjing/credentials.json` 读取 `app_id` 和 `secret_key`，若无有效 Token 则调用：
+The credentials file should contain:
+
+```json
+{
+  "app_id": "<your_app_id>",
+  "secret_key": "<your_secret_key>"
+}
+```
+
+Supported environment variables:
+
+- `CHANJING_CONFIG_DIR`: custom local config directory
+- `CHANJING_API_BASE`: custom API base URL, default is `https://open-api.chanjing.cc`
+
+If credentials are missing or invalid, the script may open the official Chanjing login page in the default browser:
+
+- `https://www.chanjing.cc/openapi/login`
+
+### Standard Workflow
+
+All API calls use JSON and UTF-8.
+
+1. Read local credentials and obtain a valid `access_token`
+2. Upload the source avatar video and optional driving audio to obtain `file_id`
+3. Create a lip-sync task with either:
+   - text-driven TTS input, or
+   - uploaded audio input
+4. Poll the task status until success or failure
+5. On success, return the remote video URL from the API response
+
+By default, return the remote video URL only. Do not auto-download the generated video unless the user explicitly asks to save it locally.
+
+## Covered APIs
+
+This skill currently covers:
+
+- `POST /open/v1/access_token`
+- `GET /open/v1/common/create_upload_url`
+- `GET /open/v1/common/file_detail`
+- `POST /open/v1/video_lip_sync/create`
+- `POST /open/v1/video_lip_sync/list`
+- `GET /open/v1/video_lip_sync/detail`
+
+## Scripts
+
+Scripts are located in `scripts/`.
+
+| Script | Purpose |
+|------|------|
+| `chanjing-config` | write or inspect local `app_id` / `secret_key` configuration |
+| `chanjing-get-token` | read local credentials and print a valid `access_token` |
+| `_auth.py` | read local credentials, fetch or refresh `access_token` |
+| `get_upload_url` | request an upload URL and return `sign_url`, `mime_type`, and `file_id` |
+| `upload_file` | upload a local file, poll `file_detail` until ready, then print `file_id` |
+| `create_task` | create a lip-sync task and print the returned task id |
+| `poll_task` | poll task status until completion and print the remote `video_url` |
+
+## Usage Examples
+
+### TTS-driven lip-sync
+
+```bash
+# 0. Configure credentials
+python scripts/chanjing-config \
+  --ak "<your_app_id>" \
+  --sk "<your_secret_key>"
+
+# 1. Upload source video and get video_file_id
+VIDEO_FILE_ID=$(python scripts/upload_file \
+  --service lip_sync_video \
+  --file ./my_video.mp4)
+
+# 2. Create a TTS-driven lip-sync task
+TASK_ID=$(python scripts/create_task \
+  --video-file-id "$VIDEO_FILE_ID" \
+  --text "君不见黄河之水天上来" \
+  --audio-man-id "C-f2429d07554749839849497589199916")
+
+# 3. Poll until completion and get the remote video URL
+python scripts/poll_task --id "$TASK_ID"
+```
+
+### Audio-driven lip-sync
+
+```bash
+# 1. Upload source video
+VIDEO_FILE_ID=$(python scripts/upload_file \
+  --service lip_sync_video \
+  --file ./my_video.mp4)
+
+# 2. Upload driving audio
+AUDIO_FILE_ID=$(python scripts/upload_file \
+  --service lip_sync_audio \
+  --file ./my_audio.wav)
+
+# 3. Create an audio-driven lip-sync task
+TASK_ID=$(python scripts/create_task \
+  --video-file-id "$VIDEO_FILE_ID" \
+  --audio-file-id "$AUDIO_FILE_ID")
+
+# 4. Poll until completion and get the remote video URL
+python scripts/poll_task --id "$TASK_ID"
+```
+
+## API Notes
+
+### Access Token
+
+Read `app_id` and `secret_key` from the local credentials file. If there is no valid token, request one from:
 
 ```http
 POST /open/v1/access_token
 Content-Type: application/json
 ```
 
-请求体（使用本地配置的 app_id、secret_key）：
+Request body:
 
 ```json
 {
-  "app_id": "<从 credentials.json 读取>",
-  "secret_key": "<从 credentials.json 读取>"
+  "app_id": "<from local credentials>",
+  "secret_key": "<from local credentials>"
 }
 ```
 
-Response example:
+Important response fields:
 
-```json
-{
-  "trace_id": "8ff3fcd57b33566048ef28568c6cee96",
-  "code": 0,
-  "msg": "success",
-  "data": {
-    "access_token": "1208CuZcV1Vlzj8MxqbO0kd1Wcl4yxwoHl6pYIzvAGoP3DpwmCCa73zmgR5NCrNu",
-    "expire_in": 1721289220
-  }
-}
-```
+| Field | Description |
+|---|---|
+| `code` | response status code |
+| `msg` | response message |
+| `data.access_token` | valid token for subsequent calls |
+| `data.expire_in` | token expiration timestamp |
 
-Response field description:
-
-| First-level Field | Second-level Field | Description |
-|---|---|---|
-| code | | Response status code |
-| msg | | Response message |
-| data | | Response data |
-| | access_token | Valid for one day, previous token will be invalidated |
-| | expire_in | Token expiration time |
-
-Response Status Code Description
+Common status codes:
 
 | Code | Description |
 |---|---|
-| 0 | Success |
-| 400 | Invalid parameter format |
-| 40000 | Parameter error |
-| 50000 | System internal error |
+| `0` | success |
+| `400` | invalid parameter format |
+| `40000` | parameter error |
+| `50000` | system internal error |
 
-### Upload Media Files (File Management)
+### Upload Media Files
 
-Before creating a lip-syncing task, you **must** upload your video (and optional audio) files using the File Management API to obtain `file_id` values.
+Before creating a lip-sync task, upload the source avatar video and optional driving audio through the File Management API.
 
-The full documentation is here: `[File Management](https://doc.chanjing.cc/api/file/file-management.html)`.
-
-#### Step 1: Get upload URL
+#### Get upload URL
 
 ```http
 GET /open/v1/common/create_upload_url
 access_token: {{access_token}}
 ```
 
-Query params:
+Query parameters:
 
-| Key | Example | Description |
-|---|---|---|
-| service | lip_sync_video / lip_sync_audio | File usage purpose. Use `lip_sync_video` for driving video, `lip_sync_audio` for audio (if audio-driven). |
-| name | 1.mp4 | Original file name including extension |
+| Parameter | Description |
+|---|---|
+| `service` | use `lip_sync_video` for avatar video and `lip_sync_audio` for driving audio |
+| `name` | original file name with extension |
 
-You will get a response containing `sign_url`, `mime_type`, and `file_id`. Use the `sign_url` with HTTP `PUT` to upload the file, setting `Content-Type` to the returned `mime_type`. After the PUT completes, **poll the file detail API** until the file is ready (do not assume a fixed wait). Keep the returned `file_id` for `video_file_id` / `audio_file_id` below.
+The response includes:
 
-**Polling:** Call `GET /open/v1/common/file_detail?id={{file_id}}` with `access_token` until the response `data.status` indicates success (e.g. `status === 2`). Only then use the `file_id` for the create task API.
+- `sign_url`
+- `mime_type`
+- `file_id`
 
-### Create Lip-Syncing Task
+Use the returned `sign_url` with HTTP `PUT` to upload the file, and set `Content-Type` to the returned `mime_type`.
 
-Submit a lip-syncing video creation task, which returns a video ID for polling later.
+After upload completes, poll the file detail API until the file is ready:
+
+```http
+GET /open/v1/common/file_detail?id={{file_id}}
+access_token: {{access_token}}
+```
+
+Only use the returned `file_id` for task creation after the file status is ready.
+
+### Create Lip-Sync Task
+
+Create a lip-sync task:
 
 ```http
 POST /open/v1/video_lip_sync/create
@@ -115,14 +222,13 @@ access_token: {{access_token}}
 Content-Type: application/json
 ```
 
-Request body example (TTS-driven):
+#### TTS-driven example
 
 ```json
 {
   "video_file_id": "e284db4d95de4220afe78132158156b5",
   "screen_width": 1080,
   "screen_height": 1920,
-  "callback": "https://example.com/openapi/callback",
   "model": 0,
   "audio_type": "tts",
   "tts_config": {
@@ -134,7 +240,7 @@ Request body example (TTS-driven):
 }
 ```
 
-Request body example (Audio-driven):
+#### Audio-driven example
 
 ```json
 {
@@ -147,27 +253,24 @@ Request body example (Audio-driven):
 }
 ```
 
-Request field description:
+Important request fields:
 
-| Parameter Name | Type | Required | Description |
-|---|---|---|---|
-| video_file_id | string | Yes | Video file ID from File Management (`data.file_id`). Supports mp4, mov, webm |
-| screen_width | int | No | Screen width, default 1080 |
-| screen_height | int | No | Screen height, default 1920 |
-| backway | int | No | Playback order when reaching end: 1-normal, 2-reverse. Default 1 |
-| drive_mode | string | No | Drive mode: ""-normal, "random"-random frame. Default "" |
-| callback | string | No | Callback URL for async notification |
-| model | int | No | Model version: 0-basic, 1-high quality. Default 0 |
-| audio_type | string | No | Audio type: "tts"-text driven, "audio"-audio driven. Default "tts" |
-| tts_config | object | Yes (for tts) | TTS configuration when audio_type="tts" |
-| tts_config.text | string | Yes (for tts) | Text to synthesize |
-| tts_config.audio_man_id | string | Yes (for tts) | Voice ID |
-| tts_config.speed | number | No | Speech speed: 0.5-2, default 1 |
-| tts_config.pitch | number | No | Pitch, default 1 |
-| audio_file_id | string | Yes (for audio) | Audio file ID from File Management (`data.file_id`) when `audio_type="audio"`. Supports mp3, m4a, wav |
-| volume | int | No | Volume: 1-100, default 100 |
+| Field | Description |
+|---|---|
+| `video_file_id` | uploaded avatar video `file_id` |
+| `screen_width` | output width, default `1080` |
+| `screen_height` | output height, default `1920` |
+| `model` | `0` basic, `1` high quality |
+| `audio_type` | `tts` or `audio` |
+| `tts_config.text` | text content for TTS-driven mode |
+| `tts_config.audio_man_id` | voice ID for TTS-driven mode |
+| `tts_config.speed` | speech speed, range `0.5` to `2` |
+| `tts_config.pitch` | pitch, usually keep `1` |
+| `audio_file_id` | uploaded driving audio `file_id` for audio-driven mode |
+| `callback` | optional callback URL |
+| `volume` | optional volume, range `1` to `100` |
 
-Response example:
+Successful response:
 
 ```json
 {
@@ -178,17 +281,17 @@ Response example:
 }
 ```
 
-Response field description:
+Important response fields:
 
 | Field | Description |
 |---|---|
-| code | Response status code |
-| msg | Response message |
-| data | Video ID for subsequent polling |
+| `code` | response status code |
+| `msg` | response message |
+| `data` | task id used for polling |
 
 ### Query Task List
 
-Get a list of lip-syncing tasks.
+List lip-sync tasks:
 
 ```http
 POST /open/v1/video_lip_sync/list
@@ -205,172 +308,55 @@ Request body:
 }
 ```
 
-Request field description:
+Important response fields in each task item:
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| page | int | No | Page number, default 1 |
-| page_size | int | No | Page size, default 10 |
+| Field | Description |
+|---|---|
+| `id` | task id |
+| `status` | `0` pending, `10` generating, `20` success, `30` failed |
+| `progress` | generation progress |
+| `msg` | task message |
+| `video_url` | remote generated video URL |
+| `preview_url` | preview image URL |
+| `duration` | video duration in ms |
+| `create_time` | unix timestamp |
 
-Response example:
+### Poll Task Detail
 
-```json
-{
-  "trace_id": "8d10659438827bd4d59eaa2696f9d391",
-  "code": 0,
-  "msg": "success",
-  "data": {
-    "list": [
-      {
-        "id": "9499ed79995c4bdb95f0d66ca84419fd",
-        "status": 20,
-        "progress": 100,
-        "msg": "success",
-        "video_url": "https://res.chanjing.cc/xxx/lip-sync/9499ed79995c4bdb95f0d66ca84419fd.mp4",
-        "preview_url": "https://res.chanjing.cc/xxx/lip-sync/9499ed79995c4bdb95f0d66ca84419fd.jpg",
-        "duration": 300,
-        "create_time": 1738636800
-      }
-    ],
-    "page_info": {
-      "page": 1,
-      "size": 10,
-      "total_count": 1,
-      "total_page": 1
-    }
-  }
-}
-```
-
-Response field description:
-
-| First-level Field | Second-level Field | Description |
-|---|---|---|
-| code | | Response status code |
-| msg | | Response message |
-| data | | Response data |
-| | list | Task list |
-| | | id: Video ID |
-| | | status: Task status (0-pending, 10-generating, 20-success, 30-failed) |
-| | | progress: Progress 0-100 |
-| | | msg: Task message |
-| | | video_url: Video download URL |
-| | | preview_url: Cover image URL |
-| | | duration: Video duration in ms |
-| | | create_time: Creation time (unix timestamp) |
-| | page_info | Pagination info |
-
-### Query Task Detail
-
-Poll the following API to check task status until completed.
+Poll task status until completion:
 
 ```http
 GET /open/v1/video_lip_sync/detail
 access_token: {{access_token}}
 ```
 
-Query params:
+Query parameter:
 
 | Parameter | Description |
 |---|---|
-| id | Video ID |
+| `id` | task id |
 
-Example: `GET /open/v1/video_lip_sync/detail?id=9499ed79995c4bdb95f0d66ca84419fd`
+Important response fields:
 
-Response example:
-
-```json
-{
-  "trace_id": "8d10659438827bd4d59eaa2696f9d391",
-  "code": 0,
-  "msg": "success",
-  "data": {
-    "id": "9499ed79995c4bdb95f0d66ca84419fd",
-    "status": 20,
-    "progress": 100,
-    "msg": "success",
-    "video_url": "https://res.chanjing.cc/xxx/lip-sync/9499ed79995c4bdb95f0d66ca84419fd.mp4",
-    "preview_url": "https://res.chanjing.cc/xxx/lip-sync/9499ed79995c4bdb95f0d66ca84419fd.jpg",
-    "duration": 300,
-    "create_time": 1738636800
-  }
-}
-```
-
-Response field description:
-
-| First-level Field | Second-level Field | Description |
-|---|---|---|
-| code | | Response status code |
-| msg | | Response message |
-| data | | Response data |
-| | id | Video ID |
-| | status | Task status: 0-pending, 10-generating, 20-success, 30-failed |
-| | progress | Progress 0-100 |
-| | msg | Task message |
-| | video_url | Video download URL |
-| | preview_url | Cover image URL |
-| | duration | Video duration in ms |
-| | create_time | Creation time (unix timestamp) |
+| Field | Description |
+|---|---|
+| `data.id` | task id |
+| `data.status` | `0` pending, `10` generating, `20` success, `30` failed |
+| `data.progress` | progress `0-100` |
+| `data.msg` | task message |
+| `data.video_url` | remote video URL |
+| `data.preview_url` | preview image URL |
+| `data.duration` | video duration in ms |
+| `data.create_time` | unix timestamp |
 
 ### Callback Notification
 
-When a callback URL is provided, the system will send a POST request when the task completes:
+If a callback URL is provided, the system may send a POST request after task completion with the same task detail payload shape.
 
-```json
-{
-  "trace_id": "8d10659438827bd4d59eaa2696f9d391",
-  "code": 0,
-  "msg": "success",
-  "data": {
-    "id": "9499ed79995c4bdb95f0d66ca84419fd",
-    "status": 20,
-    "progress": 100,
-    "msg": "success",
-    "video_url": "https://res.chanjing.cc/xxx/lip-sync/9499ed79995c4bdb95f0d66ca84419fd.mp4",
-    "preview_url": "https://res.chanjing.cc/xxx/lip-sync/9499ed79995c4bdb95f0d66ca84419fd.jpg",
-    "duration": 300,
-    "create_time": 1738636800
-  }
-}
-```
+## Output Convention
 
-## Scripts
+Default behavior:
 
-本 Skill 提供脚本（`skills/chanjing-avatar/scripts/`），与 **chanjing-credentials-guard** 使用同一配置文件（`~/.chanjing/credentials.json`）获取 Token。
-
-| 脚本 | 说明 |
-|------|------|
-| `get_upload_url` | 获取上传链接，输出 `sign_url`、`mime_type`、`file_id` |
-| `upload_file` | 上传本地文件，轮询 file_detail 直到就绪后输出 `file_id` |
-| `create_task` | 创建对口型任务（TTS 或音频驱动），输出视频任务 id |
-| `poll_task` | 轮询任务直到完成，输出 `video_url` |
-
-示例（在项目根或 skill 目录下执行）：
-
-```bash
-# 1. 上传驱动视频，得到 video_file_id
-VIDEO_FILE_ID=$(python skills/chanjing-avatar/scripts/upload_file --service lip_sync_video --file ./my_video.mp4)
-
-# 2. 创建 TTS 对口型任务（需先通过 list_common_audio 获取 audio_man_id）
-TASK_ID=$(python skills/chanjing-avatar/scripts/create_task \
-  --video-file-id "$VIDEO_FILE_ID" \
-  --text "君不见黄河之水天上来" \
-  --audio-man-id "C-f2429d07554749839849497589199916")
-
-# 3. 轮询直到完成，得到视频下载链接
-python skills/chanjing-avatar/scripts/poll_task --id "$TASK_ID"
-```
-
-音频驱动时：先上传音频得到 `audio_file_id`，再 `create_task --video-file-id <id> --audio-file-id <audio_file_id>`。
-
-## Response Status Code Description
-
-| Code | Description |
-|---|---|
-| 0 | Response successful |
-| 10400 | AccessToken verification failed |
-| 40000 | Parameter error |
-| 40001 | Exceeds RPM/QPS limit |
-| 50000 | System internal error |
-
+- return the remote video URL from `data.video_url`
+- return task status and progress when polling
+- do not auto-download the generated file unless the user explicitly asks

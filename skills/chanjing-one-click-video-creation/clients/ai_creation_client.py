@@ -8,9 +8,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
-from clients.auth import get_token
+from clients.auth import clear_cached_token, get_token, is_token_invalid
 
-API_BASE =  "https://open-api.chanjing.cc"
+API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
 
 RUNNING_STATUSES = {"Queued", "Ready", "Generating"}
 SUCCESS_STATUSES = {"Success"}
@@ -32,19 +32,27 @@ def _json_get(
     query: Optional[dict[str, Any]] = None,
     timeout: int = 30,
 ) -> dict[str, Any]:
-    token = _get_access_token()
     suffix = ""
     if query:
         suffix = "?" + urllib.parse.urlencode(query, doseq=True)
+    token = _get_access_token()
 
-    req = urllib.request.Request(
-        f"{API_BASE}{path}{suffix}",
-        headers={"access_token": token},
-        method="GET",
-    )
+    def _once(current_token: str) -> dict[str, Any]:
+        req = urllib.request.Request(
+            f"{API_BASE}{path}{suffix}",
+            headers={"access_token": current_token},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+    body = _once(token)
+    if is_token_invalid(body):
+        clear_cached_token()
+        refreshed, err = get_token(force_refresh=True)
+        if err or not refreshed:
+            raise RuntimeError(err or "刷新 access_token 失败")
+        body = _once(str(refreshed))
 
     if body.get("code") != 0:
         raise RuntimeError(body.get("msg", body))
@@ -63,18 +71,23 @@ def _json_post(
 ) -> dict[str, Any] | str:
     token = _get_access_token()
 
-    req = urllib.request.Request(
-        f"{API_BASE}{path}",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "access_token": token,
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+    def _once(current_token: str) -> dict[str, Any]:
+        req = urllib.request.Request(
+            f"{API_BASE}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"access_token": current_token, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+    body = _once(token)
+    if is_token_invalid(body):
+        clear_cached_token()
+        refreshed, err = get_token(force_refresh=True)
+        if err or not refreshed:
+            raise RuntimeError(err or "刷新 access_token 失败")
+        body = _once(str(refreshed))
 
     if body.get("code") != 0:
         raise RuntimeError(body.get("msg", body))

@@ -16,7 +16,7 @@
 ### 1. Seedream 3.0 文生图
 
 ```bash
-TASK_ID=$(python3 skills/chanjing-ai-creation/scripts/submit_task \
+TASK_ID=$(python3 scripts/submit_task \
   --creation-type 3 \
   --model-code "doubao-seedream-3.0-t2i" \
   --prompt "赛博朋克城市夜景，霓虹灯，雨夜，电影镜头" \
@@ -24,14 +24,14 @@ TASK_ID=$(python3 skills/chanjing-ai-creation/scripts/submit_task \
   --clarity 2048 \
   --number-of-images 1)
 
-python3 skills/chanjing-ai-creation/scripts/poll_task \
+python3 scripts/poll_task \
   --unique-id "$TASK_ID"
 ```
 
 ### 2. 腾讯 Kling v2.1 Master 图生视频
 
 ```bash
-TASK_ID=$(python3 skills/chanjing-ai-creation/scripts/submit_task \
+TASK_ID=$(python3 scripts/submit_task \
   --creation-type 4 \
   --model-code "tx_kling-v2-1-master" \
   --ref-img-url "https://res.chanjing.cc/chanjing/res/aigc_creation/photo/start.jpg" \
@@ -42,28 +42,28 @@ TASK_ID=$(python3 skills/chanjing-ai-creation/scripts/submit_task \
   --quality-mode pro \
   --video-duration 5)
 
-python3 skills/chanjing-ai-creation/scripts/poll_task \
+python3 scripts/poll_task \
   --unique-id "$TASK_ID"
 ```
 
 ### 3. 直接透传完整 JSON
 
 ```bash
-python3 skills/chanjing-ai-creation/scripts/submit_task \
+python3 scripts/submit_task \
   --body-file ./payload.json
 ```
 
 ### 4. 查看历史任务
 
 ```bash
-python3 skills/chanjing-ai-creation/scripts/list_tasks --type 3
-python3 skills/chanjing-ai-creation/scripts/list_tasks --type 4 --success-only
+python3 scripts/list_tasks --type 3
+python3 scripts/list_tasks --type 4 --success-only
 ```
 
 ### 5. 显式下载
 
 ```bash
-python3 skills/chanjing-ai-creation/scripts/download_result \
+python3 scripts/download_result \
   --url "https://example.com/output.png"
 ```
 

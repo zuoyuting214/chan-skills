@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-轮询 TTS 任务状态，直到完成或失败。与 chanjing-credentials-guard 使用同一配置文件获取 Token。
+轮询 TTS 任务状态，直到完成或失败。读取本地配置文件获取 Token。
 用法: poll_task --task-id <task_id> [--interval 3]
 输出: 成功时打印音频下载 URL（data.full.url），失败时打印错误到 stderr 并 exit 1
 状态: 1-生成中 9-完成

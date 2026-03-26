@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+from pathlib import Path
+
+CONFIG_DIR = Path(os.environ.get("CHANJING_CONFIG_DIR", Path.home() / ".chanjing"))
+CONFIG_FILE = CONFIG_DIR / "credentials.json"
+
+
+def read_config():
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def write_config(data):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def mask(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "*" * len(value)
+    return value[:4] + "*" * (len(value) - 8) + value[-4:]
+
+
+def main():
+    parser = argparse.ArgumentParser(description="配置蝉镜 app_id / secret_key")
+    parser.add_argument("--ak", help="蝉镜 OpenAPI app_id")
+    parser.add_argument("--sk", help="蝉镜 OpenAPI secret_key")
+    parser.add_argument("--show", action="store_true", help="显示当前配置状态")
+    args = parser.parse_args()
+
+    if args.show:
+        data = read_config()
+        print(
+            json.dumps(
+                {
+                    "config_file": str(CONFIG_FILE),
+                    "has_app_id": bool((data.get("app_id") or "").strip()),
+                    "has_secret_key": bool((data.get("secret_key") or "").strip()),
+                    "app_id_masked": mask((data.get("app_id") or "").strip()),
+                    "has_access_token": bool((data.get("access_token") or "").strip()),
+                    "expire_in": data.get("expire_in"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    if not args.ak or not args.sk:
+        parser.error("必须同时提供 --ak 和 --sk，或使用 --show 查看当前配置")
+
+    data = read_config()
+    data["app_id"] = args.ak.strip()
+    data["secret_key"] = args.sk.strip()
+    data.pop("access_token", None)
+    data.pop("expire_in", None)
+    write_config(data)
+
+    print(f"已写入配置: {CONFIG_FILE}")
+    print("已清除旧 access_token 缓存。下次调用 API 时会自动重新获取 token。")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

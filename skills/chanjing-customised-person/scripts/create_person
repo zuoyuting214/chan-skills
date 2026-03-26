@@ -12,9 +12,27 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _auth import get_token
+from _auth import clear_cached_token, get_token
 
 API_BASE = __import__("os").environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+
+
+def is_token_invalid(body):
+    code = body.get("code")
+    msg = str(body.get("msg", ""))
+    return code == 10400 or "AccessToken已失效" in msg or "AccessToken verification failed" in msg
+
+
+def call_create_person(token, body):
+    url = f"{API_BASE}/open/v1/create_customised_person"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"access_token": token, "Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def main():
@@ -59,15 +77,14 @@ def main():
         print(err, file=sys.stderr)
         sys.exit(1)
 
-    url = f"{API_BASE}/open/v1/create_customised_person"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={"access_token": token, "Content-Type": "application/json; charset=utf-8"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
+    result = call_create_person(token, body)
+    if is_token_invalid(result):
+        clear_cached_token()
+        token, err = get_token(force_refresh=True)
+        if err:
+            print(err, file=sys.stderr)
+            sys.exit(1)
+        result = call_create_person(token, body)
 
     if result.get("code") != 0:
         print(result.get("msg", result), file=sys.stderr)

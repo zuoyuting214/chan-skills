@@ -5,9 +5,59 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from clients.auth import get_token
+from clients.auth import clear_cached_token, get_token, is_token_invalid
 
-API_BASE =  "https://open-api.chanjing.cc"
+API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+
+
+def _post_json(path: str, payload: dict[str, Any], timeout: int = 30) -> dict[str, Any]:
+    token, err = get_token()
+    if err:
+        raise RuntimeError(err)
+
+    def _once(current_token: str) -> dict[str, Any]:
+        req = urllib.request.Request(
+            f"{API_BASE}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"access_token": current_token, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    res = _once(str(token))
+    if is_token_invalid(res):
+        clear_cached_token()
+        new_token, err = get_token(force_refresh=True)
+        if err:
+            raise RuntimeError(err)
+        res = _once(str(new_token))
+    return res
+
+
+def _get_json(path: str, query: dict[str, Any], timeout: int = 30) -> dict[str, Any]:
+    token, err = get_token()
+    if err:
+        raise RuntimeError(err)
+    qs = urllib.parse.urlencode(query)
+
+    def _once(current_token: str) -> dict[str, Any]:
+        req = urllib.request.Request(
+            f"{API_BASE}{path}?{qs}",
+            headers={"access_token": current_token},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    body = _once(str(token))
+    if is_token_invalid(body):
+        clear_cached_token()
+        new_token, err = get_token(force_refresh=True)
+        if err:
+            raise RuntimeError(err)
+        body = _once(str(new_token))
+    return body
 
 
 def create_tts_task(
@@ -28,23 +78,7 @@ def create_tts_task(
         "aigc_watermark": aigc_watermark,
     }
 
-    token, err = get_token()
-    if err:
-        raise RuntimeError(err)
-
-    url = f"{API_BASE}/open/v1/create_audio_task"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "access_token": token,
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        res = json.loads(resp.read().decode("utf-8"))
+    res = _post_json("/open/v1/create_audio_task", body, timeout=30)
 
     if res.get("code") != 0:
         raise RuntimeError(res.get("msg", res))
@@ -58,30 +92,13 @@ def create_tts_task(
 
 
 def poll_tts_task_full(task_id: str, interval: int = 3, timeout: int = 300) -> dict[str, Any]:
-    url = f"{API_BASE}/open/v1/audio_task_state"
-    body = json.dumps({"task_id": task_id}).encode("utf-8")
     start = time.monotonic()
 
     while True:
         if time.monotonic() - start > timeout:
             raise TimeoutError("TTS任务超时")
 
-        token, err = get_token()
-        if err:
-            raise RuntimeError(err)
-
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={
-                "access_token": token,
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            res = json.loads(resp.read().decode("utf-8"))
+        res = _post_json("/open/v1/audio_task_state", {"task_id": task_id}, timeout=30)
 
         if res.get("code") != 0:
             raise RuntimeError(res.get("msg", res))
@@ -105,20 +122,7 @@ def generate_audio_with_meta(text: str, audio_man: str) -> dict[str, Any]:
 
 
 def list_voices(page: int = 1, size: int = 100) -> dict[str, Any]:
-    token, err = get_token()
-    if err:
-        raise RuntimeError(err)
-
-    qs = urllib.parse.urlencode({"page": page, "size": size})
-    url = f"{API_BASE}/open/v1/list_common_audio?{qs}"
-    req = urllib.request.Request(
-        url,
-        headers={"access_token": token},
-        method="GET",
-    )
-
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+    body = _get_json("/open/v1/list_common_audio", {"page": page, "size": size}, timeout=30)
 
     if body.get("code") != 0:
         raise RuntimeError(body.get("msg", body))

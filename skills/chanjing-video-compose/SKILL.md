@@ -20,14 +20,16 @@ description: Use Chanjing video synthesis APIs to create digital human videos fr
 
 ## Preconditions
 
-执行本 Skill 前，必须先通过 `chanjing-credentials-guard` 完成 AK/SK 与 Token 校验。
+本 Skill 自己包含本地配置和鉴权流程，不依赖其他 skill 的运行时脚本。
 
-本 Skill 与 guard 共用：
+本 Skill 使用：
 
-* `~/.chanjing/credentials.json`
-* `https://open-api.chanjing.cc`
+* 配置文件：`~/.chanjing/credentials.json`
+* 若设置环境变量 `CHANJING_CONFIG_DIR`：使用 `$CHANJING_CONFIG_DIR/credentials.json`
+* API 基础地址：`https://open-api.chanjing.cc`（可用 `CHANJING_API_BASE` 覆盖）
 
-无凭证时，脚本会自动打开蝉镜登录页，并提示配置命令。
+当本地缺少 AK/SK 或 AK/SK 无效时，脚本可能在默认浏览器打开蝉镜官网登录页：  
+`https://www.chanjing.cc/openapi/login`
 
 ## Standard Workflow
 
@@ -62,6 +64,8 @@ description: Use Chanjing video synthesis APIs to create digital human videos fr
 
 | 脚本 | 说明 |
 |------|------|
+| `chanjing-config` | 写入/查看本地 `app_id` 与 `secret_key`，并清理旧 token 缓存 |
+| `chanjing-get-token` | 从本地凭证获取有效 `access_token`（必要时自动刷新） |
 | `_auth.py` | 读取凭证、获取或刷新 `access_token` |
 | `list_figures` | 按 `--source common|customised` 列出数字人形象，输出 `person.id` / `figure_type` / `audio_man_id` / 预览信息 |
 | `upload_file` | 上传音频或背景素材，轮询到文件可用后输出 `file_id` |

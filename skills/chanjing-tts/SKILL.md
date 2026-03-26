@@ -1,49 +1,128 @@
 ---
 name: chanjing-tts
-description: Use Chanjing TTS API to convert text to speech
+description: Use Chanjing TTS API to convert text to speech by listing voices, creating synthesis tasks, and polling task status. This skill reads app_id and secret_key from ~/.chanjing/credentials.json or $CHANJING_CONFIG_DIR/credentials.json, refreshes access_token for API calls, and may open the official Chanjing login page if credentials are missing or invalid.
+metadata:
+  openclaw:
+    requires:
+      env:
+        - CHANJING_CONFIG_DIR
+        - CHANJING_API_BASE
+    homepage: https://open-api.chanjing.cc
 ---
 
 # Chanjing TTS
 
 ## When to Use This Skill
 
-Use this skill when the user needs to generate audio from text.
+Use this skill when the user wants to convert text into speech audio with Chanjing TTS.
 
-Chanjing TTS supports:
+Typical uses:
 
-* both Chinese and English
-* multiple system voices
-* adjustment of speech speed
-* sentence-level timestamp in result
+- generate Chinese or English speech from text
+- list available voices and choose a suitable one
+- adjust speech speed
+- create a TTS task and poll until completion
+- return the remote audio URL and subtitle timestamps from the API result
 
 ## How to Use This Skill
 
-**前置条件（权限验证）**：执行本 Skill 前，必须先通过 **chanjing-credentials-guard** 完成 AK/SK 与 Token 校验。本 Skill 与 guard 使用同一套凭证（`~/.chanjing/credentials.json`）；脚本在无凭证时会**执行 `open_login_page` 脚本**，在默认浏览器打开 AK/SK 注册/登录页，并提示配置命令。
+This skill includes its own local configuration and authentication flow.
 
-Multiple APIs need to be invoked. All share the domain: "https://open-api.chanjing.cc".
-All requests communicate using json.
-You should use utf-8 to encode and decode text throughout this task.
+### Local Configuration
 
-1. Obtain an `access_token`, which is required for all subsequent API calls
-2. List all voice IDs and select one to use
-3. Call the Create Speech API, record `task_id`
-4. Poll the Query Speech Status API until success, then download generated audio file using the url in response
+This skill reads credentials from:
 
-### Obtain AccessToken
+- `~/.chanjing/credentials.json`
+- or `$CHANJING_CONFIG_DIR/credentials.json`
 
-从 `~/.chanjing/credentials.json` 读取 `app_id` 和 `secret_key`，若无有效 Token 则调用：
+The credentials file should contain:
+
+```json
+{
+  "app_id": "<your_app_id>",
+  "secret_key": "<your_secret_key>"
+}
+```
+
+Supported environment variables:
+
+- `CHANJING_CONFIG_DIR`: custom local config directory
+- `CHANJING_API_BASE`: custom API base URL, default is `https://open-api.chanjing.cc`
+
+If credentials are missing or invalid, the script may open the official Chanjing login page in the default browser:
+
+- `https://www.chanjing.cc/openapi/login`
+
+### Standard Workflow
+
+All API calls use JSON and UTF-8.
+
+1. Read local credentials and obtain a valid `access_token`
+2. List available voices and select one
+3. Create a speech synthesis task and get `task_id`
+4. Poll task status until success or failure
+5. On success, return the remote audio URL from the API response
+
+By default, return the remote audio URL only. Do not auto-download the audio file unless the user explicitly asks to save it locally.
+
+## Covered APIs
+
+This skill currently covers:
+
+- `POST /open/v1/access_token`
+- `GET /open/v1/list_common_audio`
+- `POST /open/v1/create_audio_task`
+- `POST /open/v1/audio_task_state`
+
+## Scripts
+
+Scripts are located in `scripts/`.
+
+| Script | Purpose |
+|------|------|
+| `chanjing-config` | write or inspect local `app_id` / `secret_key` configuration |
+| `_auth.py` | read local credentials, fetch or refresh `access_token` |
+| `list_voices` | list available public voices, default output is `id/name`, optional `--json` for full data |
+| `create_task` | create a TTS task and print `task_id` |
+| `poll_task` | poll task status until completion and print the remote audio URL |
+
+## Usage Examples
+
+```bash
+# 0. Configure credentials
+python scripts/chanjing-config \
+  --ak "<your_app_id>" \
+  --sk "<your_secret_key>"
+
+# 1. List voices
+python scripts/list_voices
+
+# 2. Create a synthesis task
+TASK_ID=$(python scripts/create_task \
+  --audio-man "f9248f3b1b42447fb9282829321cfcf2" \
+  --text "Hello, I am your AI assistant.")
+
+# 3. Poll until completion and get the remote audio URL
+python scripts/poll_task --task-id "$TASK_ID"
+```
+
+## API Notes
+
+### Access Token
+
+Read `app_id` and `secret_key` from the local credentials file. If there is no valid token, request one from:
 
 ```http
 POST /open/v1/access_token
 Content-Type: application/json
 ```
 
-请求体（使用本地配置的 app_id、secret_key）：
+Request body:
 
 ```json
 {
-  "app_id": "<从 credentials.json 读取>",
-  "secret_key": "<从 credentials.json 读取>"
+  "app_id": "<from local credentials>",
+  "secret_key": "<from local credentials>"
 }
 ```
 
@@ -61,42 +140,41 @@ Response example:
 }
 ```
 
-Response field description:
+Important response fields:
 
-| First-level Field | Second-level Field | Description |
-|---|---|---|
-| code | | Response status code |
-| msg | | Response message |
-| data | | Response data |
-| | access\_token | Valid for one day, previous token will be invalidated |
-| | expire\_in | Token expiration time |
+| Field | Description |
+|---|---|
+| `code` | response status code |
+| `msg` | response message |
+| `data.access_token` | valid token for subsequent calls |
+| `data.expire_in` | token expiration timestamp |
 
-Response Status Code Description
+Common status codes:
 
 | Code | Description |
 |---|---|
-| 0 | Success |
-| 400 | Invalid parameter format |
-| 40000 | Parameter error |
-| 50000 | System internal error |
+| `0` | success |
+| `400` | invalid parameter format |
+| `40000` | parameter error |
+| `50000` | system internal error |
 
-### Select a Voice ID
+### List Voices
 
-Obtain all available voice IDs via API, and select one that fits the task at hand.
-The dialect/accent can be deduced from the voice name.
+List available public voices:
 
 ```http
 GET /open/v1/list_common_audio
 access_token: {{access_token}}
 ```
 
-Use the following request body:
+Use query parameters:
 
 ```json
 {
   "page": 1,
   "size": 100
 }
+```
 
 Response example:
 
@@ -128,8 +206,7 @@ Response example:
         "speed": 1,
         "pitch": 1,
         "audition": "https://res.chanjing.cc/chanjing/res/upload/ms/2025-04-30/1b248ad05953028db5a6bcba9a951164.wav"
-      },
-      ...
+      }
     ],
     "page_info": {
       "page": 1,
@@ -141,37 +218,31 @@ Response example:
 }
 ```
 
-Response field description:
+Important voice fields:
 
-| First-level Field | Second-level Field | Third-level Field | Description |
-|---|---|---|---|
-| code | | | Response status code |
-| message | | | Response message |
-| data | | | Response data |
-| | list | List data | Public voice - list data |
-| | | id | Voice ID |
-| | | name | Voice name, if it includes a place name, the generated speech is in dialect |
-| | | gender | Gender |
-| | | lang | Language |
-| | | desc | Description |
-| | | speed | Speech speed |
-| | | pitch | Pitch |
-| | | audition | Audition link |
-| | | grade | Grade |
+| Field | Description |
+|---|---|
+| `id` | voice ID |
+| `name` | voice name |
+| `gender` | gender |
+| `lang` | language |
+| `desc` | description |
+| `audition` | audition link |
+| `grade` | grade |
 
-Response status code description:
+Common status codes:
 
 | Code | Description |
 |---|---|
-| 0 | Response successful |
-| 10400 | AccessToken verification failed |
-| 40000 | Parameter error |
-| 50000 | System internal error |
-| 51000 | System internal error |
+| `0` | success |
+| `10400` | access token verification failed |
+| `40000` | parameter error |
+| `50000` | system internal error |
+| `51000` | system internal error |
 
-### Create Speech API
+### Create Speech Task
 
-Submit a speech creating task, which returns a task ID for polling later.
+Create a TTS task:
 
 ```http
 POST /open/v1/create_audio_task
@@ -179,11 +250,11 @@ access_token: {{access_token}}
 Content-Type: application/json
 ```
 
-Request body example:
+Example request body:
 
 ```json
 {
-  "audio_man": "89843d52ccd04e2d854decd28d6143ce ",
+  "audio_man": "89843d52ccd04e2d854decd28d6143ce",
   "speed": 1,
   "pitch": 1,
   "text": {
@@ -192,15 +263,15 @@ Request body example:
 }
 ```
 
-Request field description:
+Important request fields:
 
-| Parameter Name | Type | Nested Key | Required | Example | Description |
-|---|---|---|---|---|---|
-| audio\_man | string | | Yes | 89843d52ccd04e2d854decd28d6143ce  | Voice ID |
-| speed | number | | Yes | 1 | Speech speed: 0.5 (slow) - 2 (fast) |
-| pitch | number | | Yes | 1 | Just set to 1 |
-| text | object | text | Yes | Hello, I am your AI assistant. | Rich text, length must be less than 4000 characters |
-| aigc\_watermark | bool |  | No | false | Whether to add visible watermark to audio, default to false |
+| Field | Description |
+|---|---|
+| `audio_man` | voice ID |
+| `speed` | speech speed, range `0.5` to `2` |
+| `pitch` | usually keep `1` |
+| `text.text` | synthesis text, max 4000 characters |
+| `aigc_watermark` | optional visible watermark |
 
 Response example:
 
@@ -215,29 +286,29 @@ Response example:
 }
 ```
 
-Response field description: 
+Important response fields:
 
 | Field | Description |
 |---|---|
-| code | Response status code |
-| msg | Response message |
-| task\_id | Task ID, to be used in subsequent polling step |
+| `code` | response status code |
+| `msg` | response message |
+| `data.task_id` | task ID for polling |
 
-Response status code description:
+Common status codes:
 
-| code | Description |
-| --- | --- |
-| 0 | Response successful |
-| 400 | Invalid parameter format |
-| 10400 | AccessToken verification failed |
-| 40000 | Parameter error |
-| 40001 | Exceeds QPS limit |
-| 40002 | Production duration reached limit |
-| 50000 | System internal error |
+| Code | Description |
+|---|---|
+| `0` | success |
+| `400` | invalid parameter format |
+| `10400` | access token verification failed |
+| `40000` | parameter error |
+| `40001` | exceeds QPS limit |
+| `40002` | production duration reached limit |
+| `50000` | system internal error |
 
-#### Poll Query Speech Status API
+### Poll Task Status
 
-Poll the following API until speech is generated.
+Poll task status until completion:
 
 ```http
 POST /open/v1/audio_task_state
@@ -245,19 +316,13 @@ access_token: {{access_token}}
 Content-Type: application/json
 ```
 
-Request example:
+Example request body:
 
 ```json
 {
   "task_id": "88f635dd9b8e4a898abb9d4679e0edc8"
 }
 ```
-
-Request field description:
-
-| Parameter Name | Type | Required | Example | Description |
-|---|---|---|---|---|
-| task\_id | string | Yes | 88f789dd9b8e4a121abb9d4679e0edc8 | Speech synthesis task ID |
 
 Response example:
 
@@ -293,105 +358,36 @@ Response example:
         "start_time": 2.77,
         "end_time": 4.49,
         "subtitle": "通常能够四脚着地"
-      },
-      {
-        "key": "140beae4046bd7a99fbe4706295c19aedfeeb843",
-        "start_time": 4.49,
-        "end_time": 5.73,
-        "subtitle": "这种，猫右自己"
-      },
-      {
-        "key": "e851881271876ab5a90f4be754fde2dc6b5498fd",
-        "start_time": 5.73,
-        "end_time": 7.97,
-        "subtitle": "反射显示了它们惊人的身体"
-      },
-      {
-        "key": "fbb0b4138bad189b9fc02669fe1f95116e9991b4",
-        "start_time": 7.97,
-        "end_time": 9.45,
-        "subtitle": "协调能力和灵活性"
-      },
-      {
-        "key": "f73404d135feaf84dd8fbea13af32eac847ac26d",
-        "start_time": 9.45,
-        "end_time": 12.49,
-        "subtitle": "核磁共振成像技术通过利用人体"
-      },
-      {
-        "key": "e18827931223962e477b14b2b8046947039ac222",
-        "start_time": 12.49,
-        "end_time": 14.77,
-        "subtitle": "细胞中氢原子的磁性来生成"
-      },
-      {
-        "key": "d137bf2b0c8b7a39e3f6753b7cf5d92bd877d2d9",
-        "start_time": 14.77,
-        "end_time": 15.97,
-        "subtitle": "详细的内部图像"
-      },
-      {
-        "key": "0773911ae0dbaa763a64352abdb6bdac3ff8f149",
-        "start_time": 15.97,
-        "end_time": 18.41,
-        "subtitle": "为医学诊断提供了重要工具"
       }
     ]
   }
 }
 ```
 
-Response field description:
+Important response fields:
 
-| First-level Field | Second-level Field | Third-level Field | Description |
-|---|---|---|---|
-| code | | | Response status code |
-| msg | | | Response message |
-| data | id | | Audio ID |
-| | type | | |
-| | status | | 1: generating; 9: completed |
-| | text | | Speech text |
-| | full | url | url to download the generated audio file |
-| | | path | |
-| | | duration | Audio duration |
-| | slice | | |
-| | errMsg | | Error message |
-| | errReason | | Error reason |
-| | subtitles (array type) | key | Subtitle ID |
-| | | start\_time | Subtitle start time |
-| | | end\_time | Subtitle end time |
-| | | subtitle | Subtitle text |
-
-Response status code description:
-
-| code | Description |
+| Field | Description |
 |---|---|
-| 0 | Response successful |
-| 10400 | AccessToken verification failed |
-| 40000 | Parameter error |
-| 50000 | System internal error |
+| `data.status` | `1` means generating, `9` means completed |
+| `data.full.url` | remote audio URL |
+| `data.full.duration` | audio duration |
+| `data.subtitles` | sentence-level timestamps |
+| `data.errMsg` | error message |
+| `data.errReason` | error reason |
 
-## Scripts
+Common status codes:
 
-本 Skill 提供脚本（`skills/chanjing-tts/scripts/`），**带权限验证**：与 **chanjing-credentials-guard** 使用同一配置文件；无 AK/SK 时会**执行 guard 的 `open_login_page` 脚本**，在浏览器打开注册/登录页，并提示配置命令。
+| Code | Description |
+|---|---|
+| `0` | success |
+| `10400` | access token verification failed |
+| `40000` | parameter error |
+| `50000` | system internal error |
 
-| 脚本 | 说明 |
-|------|------|
-| `list_voices` | 列出公共声音人，默认输出 id/name 表，可选 `--json` 输出完整数据 |
-| `create_task` | 创建 TTS 任务，输出 task_id |
-| `poll_task` | 轮询任务直到完成，输出音频下载 URL（full.url） |
+## Output Convention
 
-示例（在项目根或 skill 目录下执行）：
+Default behavior:
 
-```bash
-# 1. 列出可用声音，选取一个 id
-python skills/chanjing-tts/scripts/list_voices
-
-# 2. 创建合成任务
-TASK_ID=$(python skills/chanjing-tts/scripts/create_task \
-  --audio-man "f9248f3b1b42447fb9282829321cfcf2" \
-  --text "Hello, I am your AI assistant.")
-
-# 3. 轮询到完成，得到音频下载链接
-python skills/chanjing-tts/scripts/poll_task --task-id "$TASK_ID"
-```
+- return the remote audio URL from `data.full.url`
+- return subtitles when they are present in the API response
+- do not auto-download the file unless the user explicitly asks

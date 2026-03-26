@@ -20,14 +20,16 @@ description: Use Chanjing AI creation APIs to submit image or video generation t
 
 ## Preconditions
 
-执行本 Skill 前，必须先通过 `chanjing-credentials-guard` 完成 AK/SK 与 Token 校验。
+本 Skill 自己包含本地配置和鉴权流程，不依赖其他 skill 的运行时脚本。
 
-本 Skill 与 guard 共用：
+本 Skill 使用：
 
-* `~/.chanjing/credentials.json`
-* `https://open-api.chanjing.cc`
+* 配置文件：`~/.chanjing/credentials.json`
+* 若设置环境变量 `CHANJING_CONFIG_DIR`：使用 `$CHANJING_CONFIG_DIR/credentials.json`
+* API 基础地址：`https://open-api.chanjing.cc`（可用 `CHANJING_API_BASE` 覆盖）
 
-无凭证时，脚本会自动打开蝉镜登录页，并提示配置命令。
+当本地缺少 AK/SK 或 AK/SK 无效时，脚本可能在默认浏览器打开蝉镜官网登录页：  
+`https://www.chanjing.cc/openapi/login`
 
 ## Standard Workflow
 
@@ -56,11 +58,13 @@ AI 创作的主接口是统一提交器：
 
 脚本目录：
 
-* `skills/chanjing-ai-creation/scripts/`
+* `scripts/`
 
 | 脚本 | 说明 |
 |------|------|
-| `_auth.py` | 读取凭证、获取或刷新 `access_token` |
+| `chanjing-config` | 写入/查看本地 `app_id` 与 `secret_key`，并清理旧 token 缓存 |
+| `chanjing-get-token` | 从本地凭证获取有效 `access_token`（必要时自动刷新） |
+| `_auth.py` | 读取本地凭证、获取或刷新 `access_token` |
 | `submit_task` | 提交 AI 创作任务，输出 `unique_id` |
 | `get_task` | 获取单个任务详情 |
 | `list_tasks` | 列出图片或视频任务 |
@@ -72,7 +76,7 @@ AI 创作的主接口是统一提交器：
 示例 1：Seedream 3.0 文生图
 
 ```bash
-TASK_ID=$(python3 skills/chanjing-ai-creation/scripts/submit_task \
+TASK_ID=$(python3 scripts/submit_task \
   --creation-type 3 \
   --model-code "doubao-seedream-3.0-t2i" \
   --prompt "赛博朋克城市夜景，霓虹灯，雨夜，电影镜头" \
@@ -80,13 +84,13 @@ TASK_ID=$(python3 skills/chanjing-ai-creation/scripts/submit_task \
   --clarity 2048 \
   --number-of-images 1)
 
-python3 skills/chanjing-ai-creation/scripts/poll_task --unique-id "$TASK_ID"
+python3 scripts/poll_task --unique-id "$TASK_ID"
 ```
 
 示例 2：腾讯 Kling v2.1 Master 图生视频
 
 ```bash
-TASK_ID=$(python3 skills/chanjing-ai-creation/scripts/submit_task \
+TASK_ID=$(python3 scripts/submit_task \
   --creation-type 4 \
   --model-code "tx_kling-v2-1-master" \
   --ref-img-url "https://res.chanjing.cc/chanjing/res/aigc_creation/photo/start.jpg" \
@@ -97,13 +101,13 @@ TASK_ID=$(python3 skills/chanjing-ai-creation/scripts/submit_task \
   --quality-mode pro \
   --video-duration 5)
 
-python3 skills/chanjing-ai-creation/scripts/poll_task --unique-id "$TASK_ID"
+python3 scripts/poll_task --unique-id "$TASK_ID"
 ```
 
 示例 3：直接透传完整 JSON
 
 ```bash
-python3 skills/chanjing-ai-creation/scripts/submit_task \
+python3 scripts/submit_task \
   --body-file ./payload.json
 ```
 

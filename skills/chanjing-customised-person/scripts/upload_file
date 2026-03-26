@@ -13,7 +13,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _auth import get_token
+from _auth import clear_cached_token, get_token
 
 API_BASE = __import__("os").environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
 FILE_READY_STATUSES = {1}
@@ -23,11 +23,19 @@ POLL_INTERVAL_DEFAULT = 5
 POLL_TIMEOUT_DEFAULT = 300
 
 
+def is_token_invalid(body):
+    code = body.get("code")
+    msg = str(body.get("msg", ""))
+    return code == 10400 or "AccessToken已失效" in msg or "AccessToken verification failed" in msg
+
+
 def get_file_detail(token, file_id):
     url = f"{API_BASE}/open/v1/common/file_detail?id={urllib.parse.quote(file_id)}"
     req = urllib.request.Request(url, headers={"access_token": token}, method="GET")
     with urllib.request.urlopen(req, timeout=30) as resp:
         body = json.loads(resp.read().decode("utf-8"))
+    if is_token_invalid(body):
+        return None, "__TOKEN_INVALID__"
     if body.get("code") != 0:
         return None, body.get("msg", "file_detail failed")
     return body.get("data"), None
@@ -55,6 +63,14 @@ def poll_file_ready(token, file_id, interval=5, timeout=300):
     return False, "poll timeout"
 
 
+def create_upload_url(token, service, name):
+    query = urllib.parse.urlencode({"service": service, "name": name})
+    url = f"{API_BASE}/open/v1/common/create_upload_url?{query}"
+    req = urllib.request.Request(url, headers={"access_token": token}, method="GET")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def main():
     parser = argparse.ArgumentParser(description="上传定制数字人素材并轮询到文件可用")
     parser.add_argument("--file", required=True, help="本地文件路径")
@@ -77,11 +93,14 @@ def main():
         print(err, file=sys.stderr)
         sys.exit(1)
 
-    query = urllib.parse.urlencode({"service": args.service, "name": path.name})
-    url = f"{API_BASE}/open/v1/common/create_upload_url?{query}"
-    req = urllib.request.Request(url, headers={"access_token": token}, method="GET")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+    body = create_upload_url(token, args.service, path.name)
+    if is_token_invalid(body):
+        clear_cached_token()
+        token, err = get_token(force_refresh=True)
+        if err:
+            print(err, file=sys.stderr)
+            sys.exit(1)
+        body = create_upload_url(token, args.service, path.name)
 
     if body.get("code") != 0:
         print(body.get("msg", body), file=sys.stderr)
@@ -119,6 +138,18 @@ def main():
         interval=args.poll_interval,
         timeout=args.poll_timeout,
     )
+    if (not ready) and err == "__TOKEN_INVALID__":
+        clear_cached_token()
+        token, err = get_token(force_refresh=True)
+        if err:
+            print(err, file=sys.stderr)
+            sys.exit(1)
+        ready, err = poll_file_ready(
+            token,
+            file_id,
+            interval=args.poll_interval,
+            timeout=args.poll_timeout,
+        )
     if not ready:
         print(f"文件未就绪: {err}", file=sys.stderr)
         sys.exit(1)

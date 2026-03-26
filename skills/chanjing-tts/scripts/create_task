@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-创建 TTS 语音合成任务。与 chanjing-credentials-guard 使用同一配置文件获取 Token。
+创建 TTS 语音合成任务。读取本地配置文件获取 Token。
 用法: create_task --audio-man <声音id> --text "要合成的文本" [--speed 1] [--pitch 1] [--aigc-watermark]
 输出: task_id（一行）或错误到 stderr
 """

@@ -13,9 +13,22 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _auth import get_token
+from _auth import clear_cached_token, get_token
 
 API_BASE = __import__("os").environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+
+
+def is_token_invalid(body):
+    code = body.get("code")
+    msg = str(body.get("msg", ""))
+    return code == 10400 or "AccessToken已失效" in msg or "AccessToken verification failed" in msg
+
+
+def fetch_voice(token, voice_id):
+    url = f"{API_BASE}/open/v1/customised_audio?id={urllib.parse.quote(voice_id)}"
+    req = urllib.request.Request(url, headers={"access_token": token}, method="GET")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def main():
@@ -29,12 +42,15 @@ def main():
         print(err, file=sys.stderr)
         sys.exit(1)
 
-    url = f"{API_BASE}/open/v1/customised_audio?id={urllib.parse.quote(args.voice_id)}"
-
     while True:
-        req = urllib.request.Request(url, headers={"access_token": token}, method="GET")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        body = fetch_voice(token, args.voice_id)
+        if is_token_invalid(body):
+            clear_cached_token()
+            token, err = get_token(force_refresh=True)
+            if err:
+                print(err, file=sys.stderr)
+                sys.exit(1)
+            body = fetch_voice(token, args.voice_id)
 
         if body.get("code") != 0:
             print(body.get("msg", body), file=sys.stderr)

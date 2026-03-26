@@ -8,7 +8,6 @@ AK/SK 从与 chanjing-config 相同的配置文件中读取（CONFIG_DIR/credent
 """
 import json
 import os
-import subprocess
 import sys
 import urllib.request
 from pathlib import Path
@@ -20,14 +19,10 @@ BUFFER_SECONDS = 300  # 提前 5 分钟刷新
 
 
 def _run_open_login_page():
-    """执行同目录下的 open_login_page 脚本，在默认浏览器打开注册/登录页。"""
+    """在默认浏览器打开蝉镜登录页。"""
     try:
-        script = Path(__file__).resolve().parent / "open_login_page"
-        if script.exists():
-            subprocess.run([sys.executable, str(script)], check=False, timeout=5)
-        else:
-            import webbrowser
-            webbrowser.open("https://www.chanjing.cc/openapi/login")
+        import webbrowser
+        webbrowser.open("https://www.chanjing.cc/openapi/login")
     except Exception:
         try:
             import webbrowser
