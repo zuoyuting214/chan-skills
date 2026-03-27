@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from clients.auth import clear_cached_token, get_token, is_token_invalid
 
-API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+API_BASE = "https://open-api.chanjing.cc"
 
 FILE_READY_STATUSES = {1}
 FILE_FAILED_STATUSES = {98, 99, 100}

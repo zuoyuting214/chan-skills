@@ -5,11 +5,12 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple
 
-API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+API_BASE = "https://open-api.chanjing.cc"
 CONFIG_DIR = Path(os.environ.get("CHANJING_CONFIG_DIR", Path.home() / ".chanjing"))
 CONFIG_FILE = CONFIG_DIR / "credentials.json"
 BUFFER_SECONDS = 300
 LOGIN_URL = "https://www.chanjing.cc/openapi/login"
+AUTO_OPEN_LOGIN = os.environ.get("CHANJING_AUTO_OPEN_LOGIN", "").strip().lower() in {"1", "true", "yes", "on"}
 
 _token_cache = {
     "access_token": None,
@@ -18,6 +19,8 @@ _token_cache = {
 
 
 def _run_open_login_page() -> None:
+    if not AUTO_OPEN_LOGIN:
+        return
     try:
         import webbrowser
 
@@ -39,8 +42,16 @@ def read_config() -> dict:
 
 def write_config(data: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(CONFIG_DIR, 0o700)
+    except Exception:
+        pass
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    try:
+        os.chmod(CONFIG_FILE, 0o600)
+    except Exception:
+        pass
 
 
 def clear_cached_token() -> None:
@@ -69,7 +80,8 @@ def _load_credentials() -> Tuple[Optional[str], Optional[str], Optional[str]]:
     return (
         None,
         None,
-        "缺少凭证。请在 ~/.chanjing/credentials.json（或 $CHANJING_CONFIG_DIR/credentials.json）配置 app_id/secret_key。",
+        "缺少凭证。请在 ~/.chanjing/credentials.json（或 $CHANJING_CONFIG_DIR/credentials.json）配置 app_id/secret_key。"
+        "登录页：https://www.chanjing.cc/openapi/login",
     )
 
 
@@ -99,7 +111,7 @@ def _request_token(
 
     if res.get("code") != 0:
         _run_open_login_page()
-        return None, None, res.get("msg", str(res))
+        return None, None, f"{res.get('msg', str(res))}。登录页：https://www.chanjing.cc/openapi/login"
 
     data = res.get("data") or {}
     token = data.get("access_token")

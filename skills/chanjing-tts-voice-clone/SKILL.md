@@ -1,6 +1,9 @@
 ---
 name: chanjing-tts-voice-clone
 description: Use Chanjing TTS API to synthesize speech from text, using user-provided voice
+metadata:
+  openclaw:
+    homepage: https://open-api.chanjing.cc
 ---
 
 # Chanjing TTS Voice Clone
@@ -19,8 +22,9 @@ This TTS service supports:
 
 **前置条件（本地配置与鉴权）**：本 Skill 自己包含本地配置和鉴权流程，不依赖其他 skill 的运行时脚本。  
 默认读取 `~/.chanjing/credentials.json`；若设置 `CHANJING_CONFIG_DIR`，则读取 `$CHANJING_CONFIG_DIR/credentials.json`。  
-API 默认使用 `https://open-api.chanjing.cc`，可用 `CHANJING_API_BASE` 覆盖。  
-当本地缺少 AK/SK 或 AK/SK 无效时，脚本可能在默认浏览器打开蝉镜官网登录页：`https://www.chanjing.cc/openapi/login`。
+API 固定使用 `https://open-api.chanjing.cc`。  
+当本地缺少 AK/SK 或 AK/SK 无效时，脚本默认返回登录引导信息，不自动打开浏览器。  
+如需本地自动开页，可显式设置：`CHANJING_AUTO_OPEN_LOGIN=1`。登录页：`https://www.chanjing.cc/openapi/login`。
 
 Chanjing-TTS-Voice-Clone provides an asynchronous speech synthesis API.
 Hostname for all APIs is: "https://open-api.chanjing.cc".

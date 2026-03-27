@@ -14,7 +14,7 @@ from pathlib import Path
 
 CONFIG_DIR = Path(os.environ.get("CHANJING_CONFIG_DIR", Path.home() / ".chanjing"))
 CONFIG_FILE = CONFIG_DIR / "credentials.json"
-API_URL = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc") + "/open/v1/access_token"
+API_URL = "https://open-api.chanjing.cc/open/v1/access_token"
 BUFFER_SECONDS = 300  # 提前 5 分钟刷新
 
 

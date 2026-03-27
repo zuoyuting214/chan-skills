@@ -7,24 +7,29 @@ from pathlib import Path
 
 CONFIG_DIR = Path(os.environ.get("CHANJING_CONFIG_DIR", Path.home() / ".chanjing"))
 CONFIG_FILE = CONFIG_DIR / "credentials.json"
-API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+API_BASE = "https://open-api.chanjing.cc"
 BUFFER_SECONDS = 300
 LOGIN_URL = "https://www.chanjing.cc/openapi/login"
+AUTO_OPEN_LOGIN = os.environ.get("CHANJING_AUTO_OPEN_LOGIN", "").strip().lower() in {"1", "true", "yes", "on"}
 
-NO_CREDENTIALS_MSG = """已在浏览器打开蝉镜登录/注册页。
+NO_CREDENTIALS_MSG = """缺少 AK/SK 本地凭证。
 请先在 ~/.chanjing/credentials.json（或 $CHANJING_CONFIG_DIR/credentials.json）中配置：
   {
     "app_id": "<你的app_id>",
     "secret_key": "<你的secret_key>"
   }
+登录页：https://www.chanjing.cc/openapi/login
 配置完成后请重新执行您之前的操作。"""
 
-INVALID_CREDENTIALS_MSG = """AK/SK 无效或已过期，已在浏览器打开蝉镜登录/注册页。
+INVALID_CREDENTIALS_MSG = """AK/SK 无效或已过期。
 请重新获取 app_id 和 secret_key，并更新 ~/.chanjing/credentials.json
-（或 $CHANJING_CONFIG_DIR/credentials.json）后重试。"""
+（或 $CHANJING_CONFIG_DIR/credentials.json）后重试。
+登录页：https://www.chanjing.cc/openapi/login"""
 
 
 def _run_open_login_page():
+    if not AUTO_OPEN_LOGIN:
+        return
     try:
         import webbrowser
 
@@ -42,8 +47,16 @@ def read_config():
 
 def write_config(data):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(CONFIG_DIR, 0o700)
+    except Exception:
+        pass
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    try:
+        os.chmod(CONFIG_FILE, 0o600)
+    except Exception:
+        pass
 
 
 def clear_cached_token():

@@ -1,6 +1,13 @@
 ---
 name: chanjing-text-to-digital-person
 description: Use Chanjing text-to-digital-person APIs to create AI portrait images, turn them into talking videos, optionally run LoRA training, poll async tasks, and explicitly download generated assets when requested.
+metadata:
+  openclaw:
+    requires:
+      env:
+        - CHANJING_CONFIG_DIR
+        - CHANJING_AUTO_OPEN_LOGIN
+    homepage: https://open-api.chanjing.cc
 ---
 
 # Chanjing Text To Digital Person
@@ -25,9 +32,10 @@ description: Use Chanjing text-to-digital-person APIs to create AI portrait imag
 
 * 配置文件：`~/.chanjing/credentials.json`
 * 若设置环境变量 `CHANJING_CONFIG_DIR`：使用 `$CHANJING_CONFIG_DIR/credentials.json`
-* API 基础地址：`https://open-api.chanjing.cc`（可用 `CHANJING_API_BASE` 覆盖）
+* API 基础地址固定：`https://open-api.chanjing.cc`
 
-当本地缺少 AK/SK 或 AK/SK 无效时，脚本可能在默认浏览器打开蝉镜官网登录页：  
+当本地缺少 AK/SK 或 AK/SK 无效时，脚本默认返回登录引导信息，不自动打开浏览器。  
+如需本地自动开页，可显式设置：`CHANJING_AUTO_OPEN_LOGIN=1`。
 `https://www.chanjing.cc/openapi/login`
 
 ## Standard Workflow
@@ -61,7 +69,7 @@ description: Use Chanjing text-to-digital-person APIs to create AI portrait imag
 
 脚本目录：
 
-* `skills/chanjing-text-to-digital-person/scripts/`
+* `scripts/`
 
 | 脚本 | 说明 |
 |------|------|
@@ -85,7 +93,7 @@ description: Use Chanjing text-to-digital-person APIs to create AI portrait imag
 示例 1：文生图后直接图生视频
 
 ```bash
-PHOTO_TASK_ID=$(python3 skills/chanjing-text-to-digital-person/scripts/create_photo_task \
+PHOTO_TASK_ID=$(python3 scripts/create_photo_task \
   --age "Young adult" \
   --gender Female \
   --number-of-images 1 \
@@ -94,23 +102,23 @@ PHOTO_TASK_ID=$(python3 skills/chanjing-text-to-digital-person/scripts/create_ph
   --detail "短发，亲和力强，职业装" \
   --talking-pose "上半身特写，站立讲解")
 
-PHOTO_URL=$(python3 skills/chanjing-text-to-digital-person/scripts/poll_photo_task \
+PHOTO_URL=$(python3 scripts/poll_photo_task \
   --unique-id "$PHOTO_TASK_ID")
 
-MOTION_TASK_ID=$(python3 skills/chanjing-text-to-digital-person/scripts/create_motion_task \
+MOTION_TASK_ID=$(python3 scripts/create_motion_task \
   --photo-unique-id "$PHOTO_TASK_ID" \
   --photo-path "$PHOTO_URL" \
   --emotion "自然播报，语气清晰自信" \
   --gesture)
 
-python3 skills/chanjing-text-to-digital-person/scripts/poll_motion_task \
+python3 scripts/poll_motion_task \
   --unique-id "$MOTION_TASK_ID"
 ```
 
 示例 2：LoRA 训练
 
 ```bash
-LORA_ID=$(python3 skills/chanjing-text-to-digital-person/scripts/create_lora_task \
+LORA_ID=$(python3 scripts/create_lora_task \
   --name "演示LoRA" \
   --photo-url https://example.com/1.jpg \
   --photo-url https://example.com/2.jpg \
@@ -118,7 +126,7 @@ LORA_ID=$(python3 skills/chanjing-text-to-digital-person/scripts/create_lora_tas
   --photo-url https://example.com/4.jpg \
   --photo-url https://example.com/5.jpg)
 
-python3 skills/chanjing-text-to-digital-person/scripts/poll_lora_task \
+python3 scripts/poll_lora_task \
   --lora-id "$LORA_ID"
 ```
 
@@ -140,5 +148,5 @@ python3 skills/chanjing-text-to-digital-person/scripts/poll_lora_task \
 
 更多接口细节见：
 
-* `skills/chanjing-text-to-digital-person/reference.md`
-* `skills/chanjing-text-to-digital-person/examples.md`
+* `reference.md`
+* `examples.md`

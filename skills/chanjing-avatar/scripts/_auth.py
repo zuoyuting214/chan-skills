@@ -1,5 +1,5 @@
 # 鉴权：从 CONFIG_DIR/credentials.json 读取 AK/SK
-# 实现：AK/SK 校验、Token 校验与刷新；无 AK/SK 或 AK/SK 无效时在默认浏览器打开蝉镜官方登录页
+# 实现：AK/SK 校验、Token 校验与刷新；默认不自动打开浏览器，仅返回登录引导信息
 import json
 import os
 import time
@@ -8,27 +8,32 @@ from pathlib import Path
 
 CONFIG_DIR = Path(os.environ.get("CHANJING_CONFIG_DIR", Path.home() / ".chanjing"))
 CONFIG_FILE = CONFIG_DIR / "credentials.json"
-API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+API_BASE = "https://open-api.chanjing.cc"
 BUFFER_SECONDS = 300
 LOGIN_URL = "https://www.chanjing.cc/openapi/login"
+AUTO_OPEN_LOGIN = os.environ.get("CHANJING_AUTO_OPEN_LOGIN", "").strip().lower() in {"1", "true", "yes", "on"}
 
-# 无 AK/SK 时在默认浏览器打开蝉镜官方登录页，再返回此提示
-NO_CREDENTIALS_MSG = """已在浏览器打开蝉镜登录/注册页。
+# 无 AK/SK 时返回此提示；默认不自动打开浏览器
+NO_CREDENTIALS_MSG = """缺少 AK/SK 本地凭证。
 请先在 ~/.chanjing/credentials.json（或 $CHANJING_CONFIG_DIR/credentials.json）中配置：
   {
     "app_id": "<你的app_id>",
     "secret_key": "<你的secret_key>"
   }
+登录页：https://www.chanjing.cc/openapi/login
 配置完成后请重新执行您之前的操作。"""
 
-# AK/SK 无效（获取 Token 接口返回错误）时：不重试获取 token，打开官方登录页并提示重新配置
-INVALID_CREDENTIALS_MSG = """AK/SK 无效或已过期，已在浏览器打开蝉镜登录/注册页。
+# AK/SK 无效（获取 Token 接口返回错误）时：不重试获取 token，并提示重新配置
+INVALID_CREDENTIALS_MSG = """AK/SK 无效或已过期。
 请重新获取 app_id 和 secret_key，并更新 ~/.chanjing/credentials.json
-（或 $CHANJING_CONFIG_DIR/credentials.json）后重试。也可选用 chanjing-credentials-guard 提供的配置脚本手动写入凭证。"""
+（或 $CHANJING_CONFIG_DIR/credentials.json）后重试。
+登录页：https://www.chanjing.cc/openapi/login"""
 
 
 def _run_open_login_page():
-    """在默认浏览器打开蝉镜官方登录页。"""
+    """按配置决定是否尝试打开登录页。"""
+    if not AUTO_OPEN_LOGIN:
+        return
     try:
         import webbrowser
         webbrowser.open(LOGIN_URL)

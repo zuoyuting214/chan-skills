@@ -1,6 +1,9 @@
 ---
 name: chanjing-video-compose
 description: Use Chanjing video synthesis APIs to create digital human videos from text or audio, with optional background upload, task polling, and explicit download when the user asks to save the result locally.
+metadata:
+  openclaw:
+    homepage: https://open-api.chanjing.cc
 ---
 
 # Chanjing Video Compose
@@ -26,9 +29,10 @@ description: Use Chanjing video synthesis APIs to create digital human videos fr
 
 * 配置文件：`~/.chanjing/credentials.json`
 * 若设置环境变量 `CHANJING_CONFIG_DIR`：使用 `$CHANJING_CONFIG_DIR/credentials.json`
-* API 基础地址：`https://open-api.chanjing.cc`（可用 `CHANJING_API_BASE` 覆盖）
+* API 基础地址固定：`https://open-api.chanjing.cc`
 
-当本地缺少 AK/SK 或 AK/SK 无效时，脚本可能在默认浏览器打开蝉镜官网登录页：  
+当本地缺少 AK/SK 或 AK/SK 无效时，脚本默认返回登录引导信息，不自动打开浏览器。  
+如需本地自动开页，可显式设置：`CHANJING_AUTO_OPEN_LOGIN=1`。  
 `https://www.chanjing.cc/openapi/login`
 
 ## Standard Workflow
@@ -60,7 +64,7 @@ description: Use Chanjing video synthesis APIs to create digital human videos fr
 
 脚本目录：
 
-* `skills/chanjing-video-compose/scripts/`
+* `scripts/`
 
 | 脚本 | 说明 |
 |------|------|
@@ -79,10 +83,10 @@ description: Use Chanjing video synthesis APIs to create digital human videos fr
 
 ```bash
 # 1. 先列公共数字人
-python skills/chanjing-video-compose/scripts/list_figures --source common
+python scripts/list_figures --source common
 
 # 2. 用公共数字人创建文本驱动视频
-VIDEO_ID=$(python skills/chanjing-video-compose/scripts/create_task \
+VIDEO_ID=$(python scripts/create_task \
   --person-id "C-ef91f3a6db3144ffb5d6c581ff13c7ec" \
   --figure-type "sit_body" \
   --audio-man "C-0ae461135d8a4eb2b59c853162ea9848" \
@@ -96,30 +100,30 @@ VIDEO_ID=$(python skills/chanjing-video-compose/scripts/create_task \
   --text "你好，这是一个蝉镜视频合成测试。")
 
 # 3. 轮询到完成，拿到 video_url
-python skills/chanjing-video-compose/scripts/poll_task --id "$VIDEO_ID"
+python scripts/poll_task --id "$VIDEO_ID"
 ```
 
 示例 2：定制数字人上传本地音频驱动
 
 ```bash
-python skills/chanjing-video-compose/scripts/list_figures --source customised
+python scripts/list_figures --source customised
 
-AUDIO_FILE_ID=$(python skills/chanjing-video-compose/scripts/upload_file \
+AUDIO_FILE_ID=$(python scripts/upload_file \
   --service make_video_audio \
   --file ./input.wav)
 
-VIDEO_ID=$(python skills/chanjing-video-compose/scripts/create_task \
+VIDEO_ID=$(python scripts/create_task \
   --person-id "C-ef91f3a6db3144ffb5d6c581ff13c7ec" \
   --subtitle "hide" \
   --audio-file-id "$AUDIO_FILE_ID")
 
-python skills/chanjing-video-compose/scripts/poll_task --id "$VIDEO_ID"
+python scripts/poll_task --id "$VIDEO_ID"
 ```
 
 示例 3：显式下载最终视频
 
 ```bash
-python skills/chanjing-video-compose/scripts/download_result \
+python scripts/download_result \
   --url "https://example.com/output.mp4"
 ```
 
@@ -164,5 +168,5 @@ python skills/chanjing-video-compose/scripts/download_result \
 
 更多接口细节见：
 
-* `skills/chanjing-video-compose/reference.md`
-* `skills/chanjing-video-compose/examples.md`
+* `reference.md`
+* `examples.md`

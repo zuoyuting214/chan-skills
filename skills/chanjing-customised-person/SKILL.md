@@ -1,6 +1,12 @@
 ---
 name: chanjing-customised-person
 description: Use Chanjing customised person APIs to create, inspect, list, poll, and delete custom digital humans from uploaded source videos.
+metadata:
+  openclaw:
+    requires:
+      env:
+        - CHANJING_CONFIG_DIR
+    homepage: https://open-api.chanjing.cc
 ---
 
 # Chanjing Customised Person
@@ -25,9 +31,10 @@ description: Use Chanjing customised person APIs to create, inspect, list, poll,
 
 * 配置文件：`~/.chanjing/credentials.json`
 * 若设置环境变量 `CHANJING_CONFIG_DIR`：使用 `$CHANJING_CONFIG_DIR/credentials.json`
-* API 基础地址：`https://open-api.chanjing.cc`（可用 `CHANJING_API_BASE` 覆盖）
+* API 基础地址固定：`https://open-api.chanjing.cc`
 
-当本地缺少 AK/SK 或 AK/SK 无效时，脚本可能在默认浏览器打开蝉镜官网登录页：  
+当本地缺少 AK/SK 或 AK/SK 无效时，脚本默认返回登录引导信息，不自动打开浏览器。  
+如需本地自动开页，可显式设置：`CHANJING_AUTO_OPEN_LOGIN=1`。
 `https://www.chanjing.cc/openapi/login`
 
 ## Standard Workflow
@@ -53,7 +60,7 @@ description: Use Chanjing customised person APIs to create, inspect, list, poll,
 
 脚本目录：
 
-* `skills/chanjing-customised-person/scripts/`
+* `scripts/`
 
 | 脚本 | 说明 |
 |------|------|
@@ -73,30 +80,30 @@ description: Use Chanjing customised person APIs to create, inspect, list, poll,
 示例 1：从本地视频创建定制数字人
 
 ```bash
-FILE_ID=$(python3 skills/chanjing-customised-person/scripts/upload_file \
+FILE_ID=$(python3 scripts/upload_file \
   --file ./source.mp4)
 
-PERSON_ID=$(python3 skills/chanjing-customised-person/scripts/create_person \
+PERSON_ID=$(python3 scripts/create_person \
   --name "演示数字人" \
   --file-id "$FILE_ID" \
   --train-type figure)
 
-python3 skills/chanjing-customised-person/scripts/poll_person --id "$PERSON_ID"
+python3 scripts/poll_person --id "$PERSON_ID"
 ```
 
 示例 2：查看完整详情
 
 ```bash
-python3 skills/chanjing-customised-person/scripts/get_person \
+python3 scripts/get_person \
   --id "C-ef91f3a6db3144ffb5d6c581ff13c7ec"
 ```
 
 示例 3：列出与删除
 
 ```bash
-python3 skills/chanjing-customised-person/scripts/list_persons
+python3 scripts/list_persons
 
-python3 skills/chanjing-customised-person/scripts/delete_person \
+python3 scripts/delete_person \
   --id "C-ef91f3a6db3144ffb5d6c581ff13c7ec"
 ```
 
@@ -116,5 +123,5 @@ python3 skills/chanjing-customised-person/scripts/delete_person \
 
 更多接口细节与触发样例见：
 
-* `skills/chanjing-customised-person/reference.md`
-* `skills/chanjing-customised-person/examples.md`
+* `reference.md`
+* `examples.md`

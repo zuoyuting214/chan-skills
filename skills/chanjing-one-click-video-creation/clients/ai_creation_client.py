@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from clients.auth import clear_cached_token, get_token, is_token_invalid
 
-API_BASE = os.environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+API_BASE = "https://open-api.chanjing.cc"
 
 RUNNING_STATUSES = {"Queued", "Ready", "Generating"}
 SUCCESS_STATUSES = {"Success"}

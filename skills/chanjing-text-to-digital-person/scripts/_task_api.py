@@ -5,7 +5,7 @@ import urllib.request
 
 from _auth import clear_cached_token, get_token
 
-API_BASE = __import__("os").environ.get("CHANJING_API_BASE", "https://open-api.chanjing.cc")
+API_BASE = "https://open-api.chanjing.cc"
 
 PHOTO_RUNNING = {"Ready", "Generating", "Queued"}
 PHOTO_SUCCESS = {"Success"}

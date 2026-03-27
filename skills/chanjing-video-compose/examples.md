@@ -17,16 +17,16 @@
 ### 1. 公共数字人文本驱动
 
 ```bash
-python skills/chanjing-video-compose/scripts/list_figures --source common
+python scripts/list_figures --source common
 
-VIDEO_ID=$(python skills/chanjing-video-compose/scripts/create_task \
+VIDEO_ID=$(python scripts/create_task \
   --person-id "C-ef91f3a6db3144ffb5d6c581ff13c7ec" \
   --figure-type "sit_body" \
   --audio-man "C-0ae461135d8a4eb2b59c853162ea9848" \
   --subtitle "show" \
   --text "你好，这是一个蝉镜视频合成测试。")
 
-python skills/chanjing-video-compose/scripts/poll_task --id "$VIDEO_ID"
+python scripts/poll_task --id "$VIDEO_ID"
 ```
 
 说明：
@@ -37,7 +37,7 @@ python skills/chanjing-video-compose/scripts/poll_task --id "$VIDEO_ID"
 ### 2. 公共数字人文本驱动，自定义字幕位置
 
 ```bash
-VIDEO_ID=$(python skills/chanjing-video-compose/scripts/create_task \
+VIDEO_ID=$(python scripts/create_task \
   --person-id "C-ef91f3a6db3144ffb5d6c581ff13c7ec" \
   --figure-type "sit_body" \
   --audio-man "C-0ae461135d8a4eb2b59c853162ea9848" \
@@ -50,33 +50,33 @@ VIDEO_ID=$(python skills/chanjing-video-compose/scripts/create_task \
   --subtitle-stroke-width 7 \
   --text "你好，这是一个蝉镜视频合成测试。")
 
-python skills/chanjing-video-compose/scripts/poll_task --id "$VIDEO_ID"
+python scripts/poll_task --id "$VIDEO_ID"
 ```
 
 ### 3. 定制数字人本地音频驱动
 
 ```bash
-python skills/chanjing-video-compose/scripts/list_figures --source customised
+python scripts/list_figures --source customised
 
-AUDIO_FILE_ID=$(python skills/chanjing-video-compose/scripts/upload_file \
+AUDIO_FILE_ID=$(python scripts/upload_file \
   --service make_video_audio \
   --file ./demo.wav)
 
-VIDEO_ID=$(python skills/chanjing-video-compose/scripts/create_task \
+VIDEO_ID=$(python scripts/create_task \
   --person-id "C-ef91f3a6db3144ffb5d6c581ff13c7ec" \
   --audio-file-id "$AUDIO_FILE_ID")
 
-python skills/chanjing-video-compose/scripts/poll_task --id "$VIDEO_ID"
+python scripts/poll_task --id "$VIDEO_ID"
 ```
 
 ### 4. 带背景图
 
 ```bash
-BG_FILE_ID=$(python skills/chanjing-video-compose/scripts/upload_file \
+BG_FILE_ID=$(python scripts/upload_file \
   --service make_video_background \
   --file ./background.png)
 
-VIDEO_ID=$(python skills/chanjing-video-compose/scripts/create_task \
+VIDEO_ID=$(python scripts/create_task \
   --person-id "C-ef91f3a6db3144ffb5d6c581ff13c7ec" \
   --figure-type "whole_body" \
   --audio-man "C-0ae461135d8a4eb2b59c853162ea9848" \
@@ -87,7 +87,7 @@ VIDEO_ID=$(python skills/chanjing-video-compose/scripts/create_task \
 ### 5. 显式下载
 
 ```bash
-python skills/chanjing-video-compose/scripts/download_result \
+python scripts/download_result \
   --url "https://example.com/output.mp4"
 ```
 

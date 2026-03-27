@@ -9,7 +9,7 @@ metadata:
         - ffprobe
       env:
         - CHANJING_CONFIG_DIR
-        - CHANJING_API_BASE
+        - CHANJING_AUTO_OPEN_LOGIN
     homepage: https://open-api.chanjing.cc
 ---
 
@@ -52,7 +52,7 @@ metadata:
 
 ## 3. 前置条件
 
-- **鉴权**：当前 skill 通过本地配置文件读取凭证：默认 `~/.chanjing/credentials.json`，可用 `CHANJING_CONFIG_DIR` 指向其它目录（读取 `$CHANJING_CONFIG_DIR/credentials.json`）；API 域名默认 `https://open-api.chanjing.cc`，可用 `CHANJING_API_BASE` 覆盖。缺凭证或凭证无效时可能打开蝉镜官网登录页并提示重新配置。
+- **鉴权**：当前 skill 通过本地配置文件读取凭证：默认 `~/.chanjing/credentials.json`，可用 `CHANJING_CONFIG_DIR` 指向其它目录（读取 `$CHANJING_CONFIG_DIR/credentials.json`）；API 域名固定 `https://open-api.chanjing.cc`。凭证文件写入后会尝试设置为用户私有权限（目录 `700`、文件 `600`）。缺凭证或凭证无效时默认返回登录引导信息，不自动打开浏览器；仅在显式设置 `CHANJING_AUTO_OPEN_LOGIN=1` 时尝试打开蝉镜官网登录页。
 - **Plan/Script/分镜**：本地 Agent 逻辑，**无需**外部 LLM API key（本 skill 必选路径不依赖外部 LLM）  
 - **本机**：`ffmpeg`、`ffprobe`  
 - **`run_render`**：当前版本主渲染链已内聚实现，**不要求**外部 `chanjing-tts` / `chanjing-video-compose` / `chanjing-ai-creation` 目录存在，也**不再依赖** `CHAN_SKILLS_DIR` 指向包含其它 skill 的仓库根  

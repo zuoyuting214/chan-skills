@@ -1,12 +1,12 @@
 ---
 name: chanjing-avatar
-description: use chanjing avatar api to create lip-sync videos by uploading source media, creating avatar tasks, and polling task status. this skill reads app_id and secret_key from ~/.chanjing/credentials.json or $CHANJING_CONFIG_DIR/credentials.json, refreshes access_token for api calls, and may open the official chanjing login page if credentials are missing or invalid.
+description: use chanjing avatar api to create lip-sync videos by uploading source media, creating avatar tasks, and polling task status. this skill reads app_id and secret_key from ~/.chanjing/credentials.json or $CHANJING_CONFIG_DIR/credentials.json and refreshes access_token for api calls. by default it does not auto-open browser pages; it returns login guidance when credentials are missing or invalid.
 metadata:
   openclaw:
     requires:
       env:
         - CHANJING_CONFIG_DIR
-        - CHANJING_API_BASE
+        - CHANJING_AUTO_OPEN_LOGIN
     homepage: https://open-api.chanjing.cc
 ---
 
@@ -47,11 +47,15 @@ The credentials file should contain:
 Supported environment variables:
 
 - `CHANJING_CONFIG_DIR`: custom local config directory
-- `CHANJING_API_BASE`: custom API base URL, default is `https://open-api.chanjing.cc`
+- API base is fixed to `https://open-api.chanjing.cc`
 
-If credentials are missing or invalid, the script may open the official Chanjing login page in the default browser:
+If credentials are missing or invalid, scripts return login guidance with the official Chanjing login URL (no browser auto-open by default):
 
 - `https://www.chanjing.cc/openapi/login`
+
+Optional behavior:
+
+- set `CHANJING_AUTO_OPEN_LOGIN=1` only when you explicitly want local scripts to try opening the login page in your default browser.
 
 ### Standard Workflow
 

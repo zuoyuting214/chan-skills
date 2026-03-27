@@ -26,9 +26,10 @@ description: Use Chanjing AI creation APIs to submit image or video generation t
 
 * 配置文件：`~/.chanjing/credentials.json`
 * 若设置环境变量 `CHANJING_CONFIG_DIR`：使用 `$CHANJING_CONFIG_DIR/credentials.json`
-* API 基础地址：`https://open-api.chanjing.cc`（可用 `CHANJING_API_BASE` 覆盖）
+* API 基础地址固定：`https://open-api.chanjing.cc`
 
-当本地缺少 AK/SK 或 AK/SK 无效时，脚本可能在默认浏览器打开蝉镜官网登录页：  
+当本地缺少 AK/SK 或 AK/SK 无效时，脚本默认返回登录引导信息，不自动打开浏览器。  
+如需本地自动开页，可显式设置：`CHANJING_AUTO_OPEN_LOGIN=1`。
 `https://www.chanjing.cc/openapi/login`
 
 ## Standard Workflow
