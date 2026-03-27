@@ -62,3 +62,4 @@ env.bak/
 venv.bak/
 scripts/*
 chanjing-openapi.yaml.DS_Store
+.DS_Store
